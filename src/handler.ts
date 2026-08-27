@@ -147,54 +147,53 @@ export function runGitCommand(root: string, args: readonly string[], signal: Abo
 }
 
 /**
- * Default native opener.
+ * Default native opener — auto-switched by platform:
  *
- * Windows: one COM/startup call that opens the folder AND activates its
- * window. The foreground lock refuses windows raised by processes that never
+ * - win32: a PowerShell 5.1 helper drives the Windows shell (see below).
+ * - darwin: `open` direct spawn.
+ * - linux/other: `xdg-open` direct spawn.
+ *
+ * Windows specifics (the only place the plugin touches Win32):
+ * the foreground lock refuses to raise windows from processes that never
  * received input, so the helper first synthesizes one Alt key press (WScript
- * SendKeys): the system then treats this process as the last-input process
- * and grants it foreground permission.
+ * SendKeys) — the system then treats this process as the last-input process
+ * and grants it foreground permission. It then opens the folder:
  *
- * - Folder not open yet: `Shell.Application.Explore(path)` opens and raises
- *   a new window.
- * - Folder already open: Explore would only try to focus the existing window,
- *   and that activation from a background service is refused by the
- *   foreground lock — so `/n,/e` forces a brand-new window instead, which
- *   opens raised.
+ * - No window for it yet: `Shell.Application.Explore(path)` — opens AND
+ *   raises a new window.
+ * - Already open: Explore would only try to focus the existing window, and
+ *   that activation from a background service is refused by the foreground
+ *   lock — so `explorer.exe /n,/e,<path>` forces a brand-new window instead.
  *
- * Plain COM needs no P/Invoke, so it also survives restricted PowerShell 5.1
- * environments where Add-Type (which shells out to csc.exe) is blocked. The
- * official host.openPath's powershell Invoke-Item does not surface a window
- * in every session, so this channel owns the open.
- *
- * macOS / Linux: `open` / `xdg-open` direct spawns.
+ * The helper is plain COM and needs no P/Invoke, so it also survives
+ * restricted PowerShell 5.1 environments where Add-Type (which shells out to
+ * csc.exe) is blocked. The official host.openPath powershell Invoke-Item does
+ * not surface a window in every session, hence the channel-owned open.
  */
 export function runOpenCommand(path: string, signal: AbortSignal): Promise<{ code: number | null; stderr: string }> {
   if (process.platform === 'win32') {
     const script = [
+      // UTF-8 on both streams so the node side decodes error text correctly
+      // (the harness session's console code page is not UTF-8).
       '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+      '[Console]::Error.OutputEncoding = [System.Text.Encoding]::UTF8',
       "$ErrorActionPreference = 'Stop'",
       'try {',
       `  $want = '${path.replaceAll("'", "''")}'.TrimEnd([char]92).ToLowerInvariant()`,
       '  $shell = New-Object -ComObject Shell.Application',
-      '  $before = @($shell.Windows() | Where-Object { try { $_.Document.Folder.Self.Path.TrimEnd([char]92).ToLowerInvariant() -eq $want } catch { $false } }).Count',
-      '  Write-Output "WINDOWS_BEFORE=$before"',
+      '  $alreadyOpen = @($shell.Windows() | Where-Object { try { $_.Document.Folder.Self.Path.TrimEnd([char]92).ToLowerInvariant() -eq $want } catch { $false } }).Count -gt 0',
       "  (New-Object -ComObject WScript.Shell).SendKeys('%')",
       '  Start-Sleep -Milliseconds 80',
-      '  if ($before -gt 0) {',
+      '  if ($alreadyOpen) {',
       `    Start-Process explorer.exe -ArgumentList "/n,/e,${path.replaceAll('"', '""')}"`,
       '  } else {',
       `    $shell.Explore('${path.replaceAll("'", "''")}')`,
       '  }',
-      '  Start-Sleep -Milliseconds 800',
-      '  $after = @($shell.Windows() | Where-Object { try { $_.Document.Folder.Self.Path.TrimEnd([char]92).ToLowerInvariant() -eq $want } catch { $false } }).Count',
-      '  Write-Output "WINDOWS_AFTER=$after"',
-      "  Write-Output 'OPENED'",
+      '  exit 0',
       '} catch {',
-      "  Write-Output ('OPEN_FAILED: ' + $_.Exception.Message)",
+      "  [Console]::Error.WriteLine('OPEN_FAILED: ' + $_.Exception.Message)",
       '  exit 1',
       '}',
-      'exit 0',
     ].join('\n')
     return new Promise((resolve) => {
       const child = spawn(
@@ -202,17 +201,10 @@ export function runOpenCommand(path: string, signal: AbortSignal): Promise<{ cod
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         { windowsHide: true },
       )
-      let stdout = ''
       let stderr = ''
-      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
       child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
       child.on('error', (error) => { resolve({ code: null, stderr: error.message }) })
-      child.on('close', (code) => {
-        // The window counters tell whether Explore reused an existing window
-        // (BEFORE == AFTER) or created a new one — visible in the server log.
-        console.log('[fileexplorer] open helper stdout =', JSON.stringify(stdout))
-        resolve({ code: code ?? -1, stderr })
-      })
+      child.on('close', (code) => { resolve({ code: code ?? -1, stderr }) })
       signal.addEventListener('abort', () => { child.kill() }, { once: true })
     })
   }
@@ -421,10 +413,8 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
   const lastOpenAt = new Map<string, number>()
   return async (endpoint, payload, signal): Promise<RpcResult<unknown>> => {
     if (endpoint === 'open') {
-      console.log('[fileexplorer] open endpoint hit, payload =', JSON.stringify(payload))
       const openPath = (payload as { path?: unknown } | null)?.path
       if (typeof openPath !== 'string' || !isQualifiedAbsolutePath(openPath)) {
-        console.log('[fileexplorer] open rejected, path =', JSON.stringify(openPath))
         return {
           ok: false,
           error: {
@@ -440,14 +430,12 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
       const now = Date.now()
       const lastOpen = lastOpenAt.get(openPath)
       if (lastOpen !== undefined && now - lastOpen < openCooldownMs) {
-        console.log('[fileexplorer] open coalesced, path =', JSON.stringify(openPath))
         return { ok: true, value: { opened: true, throttled: true } }
       }
       // Stamp at START so overlapping requests coalesce too; a failed open
       // releases the slot so a retry is never delayed.
       lastOpenAt.set(openPath, now)
       const opened = await runOpen(openPath, signal)
-      console.log('[fileexplorer] open runOpen code =', opened.code, 'stderr =', JSON.stringify(opened.stderr))
       if (opened.code !== 0) {
         lastOpenAt.delete(openPath)
         return {
