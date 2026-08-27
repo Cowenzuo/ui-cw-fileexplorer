@@ -67,13 +67,18 @@ tsdown.config.ts      # node 半 + 浏览器半（CSS Modules 内容哈希）
 
 ```sh
 pnpm install && pnpm build        # 产物：lib/index.js + lib/client.js
-dsh plugin --profile web add .    # 装入 profile（bundle 机制）
 pnpm typecheck                    # tsc --noEmit
-pnpm test                         # vitest（30 个：解析/端点/真仓库集成）
+pnpm test                         # vitest（33 个：解析/端点/真仓库集成）
 pnpm build:watch                  # client 面 watch → HMR 热更
+.\publish.ps1                     # 一键发布：build+test → npm pack → 上架
+                                  #   %USERPROFILE%\.dsh\profiles\web\vendor
+                                  #   → 更新依赖（file:./vendor/...tgz）→ pnpm install
+.\publish.ps1 -ProfileDir <dir>   # 发布到指定 profile；publish.cmd 可双击运行
 ```
 
 类型依赖通过 tsconfig paths 指向 dsh 源码的 `lib/types`（开发期，见 tsconfig.json）。
+`publish.ps1` 含中文，须保持 **UTF-8 带 BOM** 编码（Windows PowerShell 5.1 按
+GBK 解析无 BOM 文件会乱码）；发布后需重启 dsh 生效。
 
 ### 已知限制
 
