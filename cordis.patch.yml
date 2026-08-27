@@ -1,0 +1,10 @@
+# ui-cw-fileexplorer bundle layer.
+#
+# One dual-face row: the node half activates in the Loader (this package's
+# `apply` from src/index.ts); the browser half is a dsh.client roster row the
+# modules node half scans into window.__DSH_BOOT__ and serves as
+# /plugins/<name>/client.js. Same mechanism as the in-repo dual-face packages
+# (e.g. @deepseek-ai/dsh-client-hmr).
+- insert:
+    - id: ui-cw-fileexplorer
+      name: '@dsh-plugins/ui-cw-fileexplorer'

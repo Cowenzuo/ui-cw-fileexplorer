@@ -1,0 +1,227 @@
+/* Git drawer: branch row + read-only commit list. Same token discipline as
+   the file drawer; the panel title lives on the outer drawer shell. */
+
+.drawer {
+  flex: 1; /* fill the outer drawer shell */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Branch row: the badge row lives above the commit list (the auxiliary tab
+   bar owns the panel title). */
+.branchRow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 4px 6px 2px;
+}
+
+/* Current branch badge in the title bar (visible even while collapsed):
+   local branch + ahead/behind counts against the upstream. Clicking opens
+   the branch dropdown (view switch, never checkout). */
+.branchBadge {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: none;
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.branchBadge:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  outline: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* Branch dropdown anchored under the title bar. */
+.branchMenu {
+  position: absolute;
+  top: 34px;
+  right: 6px;
+  left: 6px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  max-height: 40%;
+  overflow: auto;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--dsw-specific-surface-elevated, var(--dsw-specific-sidebar-fill));
+  border: 1px solid var(--dsw-alias-border-l2);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
+}
+
+.branchItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.branchItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.branchItemActive {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.branchItemName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchItemMark {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+}
+
+.branchName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Local leads the upstream (unpushed): brand tint. */
+.aheadMark {
+  flex: none;
+  color: var(--dsw-alias-state-business-primary);
+  font-weight: 600;
+}
+
+/* Local trails the upstream (unpulled): muted contrast. */
+.behindMark {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+  font-weight: 600;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px 8px;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.list {
+  flex: none; /* keep rows intact when the drawer squeezes; the body scrolls */
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Position tags at the row start: the data icon (blue) marks the local
+   working commit, the globe (amber) marks where the upstream branch sits —
+   visible under rebases and forks, where the two can interleave. */
+.tag {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  user-select: none;
+}
+
+.tagHead {
+  color: var(--dsw-alias-state-business-primary);
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent);
+}
+
+.tagRemote {
+  color: var(--dsw-alias-state-warn-primary);
+  border: 1px solid var(--dsw-alias-state-warn-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, transparent);
+}
+
+/* Untracked-branch hint above the list. */
+.noUpstream {
+  padding: 2px 6px 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+/* External-change notice: another tool switched the branch or added commits. */
+.notice {
+  margin-bottom: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.hash {
+  flex: none;
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+}
+
+.date {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.message {
+  flex: none; /* states stay readable when the drawer squeezes */
+  padding: 4px 6px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
