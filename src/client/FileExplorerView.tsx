@@ -63,7 +63,7 @@ const MAX_AUX_TOTAL = 0.8
 const WIDTH_VAR = '--dsh-fileexplorer-width'
 /** Root-level push stylesheet: official UI yields to the dock. */
 const PUSH_CSS = [
-  `:root { ${WIDTH_VAR}: 0px; }`,
+  `:root { ${WIDTH_VAR}: ${RAIL_WIDTH}px; }`,
   `#root { margin-right: var(${WIDTH_VAR}); transition: margin-right 160ms ease; }`,
   `:root[data-dsh-fileexplorer-dragging] #root { transition: none; }`,
 ].join('\n')
@@ -148,11 +148,12 @@ export function FileExplorerDock(
     return () => { style.remove() }
   }, [])
 
-  // Publish the push width: expanded pushes by the panel width, collapsed
-  // pushes by nothing (the slim rail overlays the official UI instead).
+  // Publish the push width: expanded pushes by the panel width, collapsed by
+  // the rail width (the rail still occupies that strip, so consumers must not
+  // see 0 — a bottom dock reading this variable would otherwise cover it).
   useEffect(() => {
     if (dragging) return // the drag loop writes the variable directly
-    document.documentElement.style.setProperty(WIDTH_VAR, expanded ? `${width}px` : '0px')
+    document.documentElement.style.setProperty(WIDTH_VAR, expanded ? `${width}px` : `${RAIL_WIDTH}px`)
   }, [expanded, width, dragging])
 
   /** Write the current drag width straight to the DOM (zero React renders). */
