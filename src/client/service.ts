@@ -10,7 +10,7 @@ import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type {
   FileExplorerListing, FileExplorerListRequest, FileExplorerGitRequest,
-  FileExplorerHistoryRequest, FileHistorySnapshot, GitSnapshot,
+  FileExplorerHistoryRequest, FileExplorerOpenResult, FileHistorySnapshot, GitSnapshot,
 } from '../contract.ts'
 
 /** Callback face the view consumes; plain data and callbacks only. */
@@ -19,7 +19,7 @@ export interface FileExplorerClient {
   git(root: string, ref: string | null, signal: AbortSignal): Promise<RpcResult<GitSnapshot>>
   fileHistory(root: string, path: string, signal: AbortSignal): Promise<RpcResult<FileHistorySnapshot>>
   /** Ask the host OS to reveal a path (the official host.openPath privilege). */
-  openInSystem(path: string, signal: AbortSignal): Promise<RpcResult<unknown>>
+  openInSystem(path: string, signal: AbortSignal): Promise<RpcResult<FileExplorerOpenResult>>
 }
 
 /**
@@ -55,11 +55,12 @@ export function createFileExplorerClient(ctx: Context): FileExplorerClient {
       return result as RpcResult<FileHistorySnapshot>
     },
     openInSystem: async (path, signal) => {
-      // Our own /fileexplorer/open endpoint: a direct spawn of the platform
-      // file manager (explorer.exe / open / xdg-open). The official
-      // host.openPath powershell Invoke-Item does not surface a window in
-      // every session.
-      return connection.rpc.call('/fileexplorer', 'open', { path }, signal)
+      // Our own /fileexplorer/open endpoint: opens the folder in the system
+      // file manager (Shell.Application.Explore, forced-new-window when it is
+      // already open). The official host.openPath powershell Invoke-Item does
+      // not surface a window in every session.
+      const result = await connection.rpc.call('/fileexplorer', 'open', { path }, signal)
+      return result as RpcResult<FileExplorerOpenResult>
     },
   }
 }

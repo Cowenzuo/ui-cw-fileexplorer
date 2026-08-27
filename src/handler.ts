@@ -40,6 +40,9 @@ export type RunGit = (root: string, args: readonly string[], signal: AbortSignal
 /** Native open seam: the default spawns the platform opener, tests inject a fake. */
 export type RunOpen = (path: string, signal: AbortSignal) => Promise<{ code: number | null; stderr: string }>
 
+/** Default per-path cooldown between two opens of the same directory. */
+export const OPEN_COOLDOWN_MS = 1200
+
 export interface FileExplorerHandlerOptions {
   /** Complete-result bound; a cut level keeps the name-sorted head (mirrors the directory picker's maxEntries). */
   maxEntries?: number
@@ -54,6 +57,12 @@ export interface FileExplorerHandlerOptions {
   runGit?: RunGit
   /** Native opener; defaults to a direct spawn, tests inject a fake. */
   runOpen?: RunOpen
+  /**
+   * Per-path open cooldown: repeat opens of the same directory inside this
+   * window are coalesced (a burst of mis-clicks opens one window, not N).
+   * The first open still starts immediately — no perceived lag.
+   */
+  openCooldownMs?: number
 }
 
 /** Windows drive-rooted or full-UNC absolute form; rejects relative and rooted drive-less forms. */
@@ -405,6 +414,11 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
   const readHidden = options.readHidden ?? (process.platform === 'win32' ? readWindowsHidden : undefined)
   const runGit = options.runGit ?? runGitCommand
   const runOpen = options.runOpen ?? runOpenCommand
+  const openCooldownMs = options.openCooldownMs ?? OPEN_COOLDOWN_MS
+  // Per-path last-open timestamps; the entry is set when the open STARTS (so
+  // concurrent bursts coalesce too) and removed when it fails (retry stays
+  // immediate). Coalesced calls never refresh the timestamp.
+  const lastOpenAt = new Map<string, number>()
   return async (endpoint, payload, signal): Promise<RpcResult<unknown>> => {
     if (endpoint === 'open') {
       console.log('[fileexplorer] open endpoint hit, payload =', JSON.stringify(payload))
@@ -420,9 +434,22 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
           },
         }
       }
+      // Burst protection: a mis-click storm opens one window, not N. The
+      // first open starts immediately; later ones inside the cooldown are
+      // coalesced silently (the window is already up).
+      const now = Date.now()
+      const lastOpen = lastOpenAt.get(openPath)
+      if (lastOpen !== undefined && now - lastOpen < openCooldownMs) {
+        console.log('[fileexplorer] open coalesced, path =', JSON.stringify(openPath))
+        return { ok: true, value: { opened: true, throttled: true } }
+      }
+      // Stamp at START so overlapping requests coalesce too; a failed open
+      // releases the slot so a retry is never delayed.
+      lastOpenAt.set(openPath, now)
       const opened = await runOpen(openPath, signal)
       console.log('[fileexplorer] open runOpen code =', opened.code, 'stderr =', JSON.stringify(opened.stderr))
       if (opened.code !== 0) {
+        lastOpenAt.delete(openPath)
         return {
           ok: false,
           error: {

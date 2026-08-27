@@ -411,6 +411,43 @@ describe('git snapshot', () => {
     expect(failed).toMatchObject({ ok: false, error: { code: 'directory-unreadable', message: expect.stringContaining('explorer failed') } })
   })
 
+  it('coalesces rapid repeat opens of the same path inside the cooldown', async () => {
+    const opened: string[] = []
+    const runOpen = async (path: string): Promise<{ code: number | null; stderr: string }> => {
+      opened.push(path)
+      return { code: 0, stderr: '' }
+    }
+    const handler = createFileExplorerHandler({ runOpen, openCooldownMs: 5000 })
+    const target = join(root, 'sub')
+    const first = await handler('open', { path: target }, new AbortController().signal)
+    expect(first).toEqual({ ok: true, value: { opened: true } })
+    // A second click inside the cooldown is acknowledged but coalesced.
+    const second = await handler('open', { path: target }, new AbortController().signal)
+    expect(second).toEqual({ ok: true, value: { opened: true, throttled: true } })
+    expect(opened).toEqual([target])
+    // A different path is never throttled by this one.
+    const other = join(root, 'other')
+    const third = await handler('open', { path: other }, new AbortController().signal)
+    expect(third).toEqual({ ok: true, value: { opened: true } })
+    expect(opened).toEqual([target, other])
+  })
+
+  it('releases the cooldown slot when an open fails', async () => {
+    let calls = 0
+    const runOpen = async (): Promise<{ code: number | null; stderr: string }> => {
+      calls += 1
+      return calls === 1 ? { code: 1, stderr: 'boom' } : { code: 0, stderr: '' }
+    }
+    const handler = createFileExplorerHandler({ runOpen, openCooldownMs: 5000 })
+    const target = join(root, 'sub')
+    const failed = await handler('open', { path: target }, new AbortController().signal)
+    expect(failed).toMatchObject({ ok: false })
+    // A failed open must not delay an immediate retry.
+    const retry = await handler('open', { path: target }, new AbortController().signal)
+    expect(retry).toEqual({ ok: true, value: { opened: true } })
+    expect(calls).toBe(2)
+  })
+
   it('rejects a git root that is not fully qualified', async () => {
     const runGit: RunGit = async () => { throw new Error('must not run') }
     const result = await createFileExplorerHandler({ runGit })('git', { root: 'relative/path' }, new AbortController().signal)

@@ -85,6 +85,21 @@ export interface FileHistorySnapshot {
   commits: GitCommitRow[]
 }
 
+/** open request payload: the directory to reveal in the system file manager. */
+export interface FileExplorerOpenRequest {
+  path: string
+}
+
+/**
+ * open response value. `throttled:true` means the request arrived inside the
+ * per-path cooldown after a previous open of the same directory, so the host
+ * coalesced it (the window is already up) — the client treats it as success.
+ */
+export interface FileExplorerOpenResult {
+  opened: boolean
+  throttled?: boolean
+}
+
 /** One compact commit row: short hash, subject, short date. */
 export interface GitCommitRow {
   hash: string
