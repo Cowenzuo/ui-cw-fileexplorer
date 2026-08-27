@@ -389,6 +389,28 @@ describe('git snapshot', () => {
     expect(value.commits.map(commit => commit.subject)).toEqual(['second version', 'first version'])
   })
 
+  it('serves an open request through the open endpoint', async () => {
+    const calls: string[] = []
+    const runOpen = async (path: string): Promise<{ code: number | null; stderr: string }> => {
+      calls.push(path)
+      return { code: 0, stderr: '' }
+    }
+    const target = join(root, 'sub')
+    const result = await createFileExplorerHandler({ runOpen })('open', { path: target }, new AbortController().signal)
+    expect(result).toEqual({ ok: true, value: { opened: true } })
+    expect(calls).toEqual([target])
+  })
+
+  it('rejects an open path that is not fully qualified and surfaces opener failures', async () => {
+    const handler = createFileExplorerHandler({
+      runOpen: async () => ({ code: 1, stderr: 'explorer failed' }),
+    })
+    const relative = await handler('open', { path: 'relative/path' }, new AbortController().signal)
+    expect(relative).toMatchObject({ ok: false, error: { code: 'directory-unreadable' } })
+    const failed = await handler('open', { path: join(root, 'x') }, new AbortController().signal)
+    expect(failed).toMatchObject({ ok: false, error: { code: 'directory-unreadable', message: expect.stringContaining('explorer failed') } })
+  })
+
   it('rejects a git root that is not fully qualified', async () => {
     const runGit: RunGit = async () => { throw new Error('must not run') }
     const result = await createFileExplorerHandler({ runGit })('git', { root: 'relative/path' }, new AbortController().signal)

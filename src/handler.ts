@@ -37,6 +37,9 @@ export interface RunGitResult {
 /** git invocation seam: the default spawns git(1), tests inject a fake. */
 export type RunGit = (root: string, args: readonly string[], signal: AbortSignal) => Promise<RunGitResult>
 
+/** Native open seam: the default spawns the platform opener, tests inject a fake. */
+export type RunOpen = (path: string, signal: AbortSignal) => Promise<{ code: number | null; stderr: string }>
+
 export interface FileExplorerHandlerOptions {
   /** Complete-result bound; a cut level keeps the name-sorted head (mirrors the directory picker's maxEntries). */
   maxEntries?: number
@@ -49,6 +52,8 @@ export interface FileExplorerHandlerOptions {
   readHidden?: (root: string) => Promise<ReadonlySet<string>>
   /** git(1) runner; defaults to a spawn, tests inject a fake. */
   runGit?: RunGit
+  /** Native opener; defaults to a direct spawn, tests inject a fake. */
+  runOpen?: RunOpen
 }
 
 /** Windows drive-rooted or full-UNC absolute form; rejects relative and rooted drive-less forms. */
@@ -128,6 +133,42 @@ export function runGitCommand(root: string, args: readonly string[], signal: Abo
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
     child.on('error', (error) => { resolve({ code: null, stdout: '', stderr: error.message }) })
     child.on('close', (code) => { resolve({ code: code ?? -1, stdout, stderr }) })
+    signal.addEventListener('abort', () => { child.kill() }, { once: true })
+  })
+}
+
+/**
+ * Default native opener: a direct spawn of the platform's file manager —
+ * explorer.exe on Windows (the official host.openPath's powershell
+ * Invoke-Item does not surface a window in every session), `open` on macOS,
+ * `xdg-open` on Linux.
+ */
+export function runOpenCommand(path: string, signal: AbortSignal): Promise<{ code: number | null; stderr: string }> {
+  const command = process.platform === 'win32'
+    ? { file: 'explorer.exe', args: [path] }
+    : process.platform === 'darwin'
+      ? { file: 'open', args: [path] }
+      : { file: 'xdg-open', args: [path] }
+  return new Promise((resolve) => {
+    // explorer.exe must NOT be spawned with windowsHide (CREATE_NO_WINDOW):
+    // it then skips creating its window entirely.
+    const child = spawn(
+      command.file,
+      command.args,
+      process.platform === 'win32' ? undefined : { windowsHide: true },
+    )
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    child.on('error', (error) => { resolve({ code: null, stderr: error.message }) })
+    child.on('close', (code) => {
+      if (process.platform === 'win32') {
+        // explorer.exe forwards the open request to the running instance and
+        // exits nonzero — that is the normal success path, not a failure.
+        resolve({ code: 0, stderr })
+      } else {
+        resolve({ code: code ?? -1, stderr })
+      }
+    })
     signal.addEventListener('abort', () => { child.kill() }, { once: true })
   })
 }
@@ -318,7 +359,33 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
   const maxEntries = options.maxEntries ?? 1000
   const readHidden = options.readHidden ?? (process.platform === 'win32' ? readWindowsHidden : undefined)
   const runGit = options.runGit ?? runGitCommand
+  const runOpen = options.runOpen ?? runOpenCommand
   return async (endpoint, payload, signal): Promise<RpcResult<unknown>> => {
+    if (endpoint === 'open') {
+      const openPath = (payload as { path?: unknown } | null)?.path
+      if (typeof openPath !== 'string' || !isQualifiedAbsolutePath(openPath)) {
+        return {
+          ok: false,
+          error: {
+            code: 'directory-unreadable',
+            message: `open path is not fully qualified: ${String(openPath)}`,
+            details: { path: String(openPath) },
+          },
+        }
+      }
+      const opened = await runOpen(openPath, signal)
+      if (opened.code !== 0) {
+        return {
+          ok: false,
+          error: {
+            code: 'directory-unreadable',
+            message: `native open failed for ${openPath}: ${opened.stderr}`,
+            details: { path: openPath },
+          },
+        }
+      }
+      return { ok: true, value: { opened: true } }
+    }
     if (endpoint === 'file-history') {
       const historyPayload = payload as FileExplorerHistoryRequest | null
       const historyRoot = historyPayload?.root

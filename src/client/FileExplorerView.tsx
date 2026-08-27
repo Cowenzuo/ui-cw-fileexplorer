@@ -114,6 +114,8 @@ export function FileExplorerDock(
   const [listing, setListing] = useState<FileExplorerListing | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [selectedFile, setSelectedFile] = useState<{ name: string; path: string } | null>(null)
+  const [openError, setOpenError] = useState<string | null>(null)
+  const openErrorTimer = useRef<number | undefined>(undefined)
   const fingerprintRef = useRef<string>('')
   const previousRoot = useRef(cwd)
   const root = cwd
@@ -246,6 +248,16 @@ export function FileExplorerDock(
     delete document.documentElement.dataset.dshFileexplorerDragging
     event.currentTarget.releasePointerCapture(event.pointerId)
     if (current !== null) setHistoryRatio(current.lastRatio)
+  }
+
+  /** Reveal the navigated folder; a refusal surfaces as a transient error. */
+  const handleOpenInSystem = async (): Promise<void> => {
+    if (listing === undefined) return
+    const result = await openInSystem(listing.path, new AbortController().signal)
+    if (result.ok) return
+    setOpenError(result.error.message)
+    window.clearTimeout(openErrorTimer.current)
+    openErrorTimer.current = window.setTimeout(() => { setOpenError(null) }, 3_000)
   }
 
   // Re-root only when the WORKSPACE changes (a different session in the same
@@ -388,18 +400,23 @@ export function FileExplorerDock(
                         crumbs={listing.crumbs}
                         onNavigate={setPath}
                       />
-                      {/* Reveal the current folder in the host OS (Explorer /
-                          Finder). */}
+                      {/* Reveal the navigated folder in the host OS
+                          (Explorer / Finder). Purely navigation-bound: it
+                          opens the breadcrumb's current directory, never
+                          the selected file. */}
                       <button
                         type="button"
                         className={css.openButton}
                         aria-label={t('open.folder')}
-                        title={t('open.folder')}
-                        onClick={() => { void openInSystem(listing.path, new AbortController().signal) }}
+                        title={`${t('open.folder')}：${listing.path}`}
+                        onClick={() => { void handleOpenInSystem() }}
                       >
                         <IconFolderOpen16 size={14} />
                       </button>
                     </div>
+                  )}
+                  {openError !== null && (
+                    <div className={css.message}>{t('error.load')}：{openError}</div>
                   )}
                   {error !== undefined && (
                     <div className={css.message}>{t('error.load')}：{error}</div>

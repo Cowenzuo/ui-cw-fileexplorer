@@ -55,9 +55,11 @@ export function createFileExplorerClient(ctx: Context): FileExplorerClient {
       return result as RpcResult<FileHistorySnapshot>
     },
     openInSystem: async (path, signal) => {
-      // The official host.openPath privilege rides the shared /api channel
-      // (loopback-pinned); the OS reveals the folder with its default app.
-      return connection.rpc.call('/api', 'host.openPath', { path }, signal)
+      // Our own /fileexplorer/open endpoint: a direct spawn of the platform
+      // file manager (explorer.exe / open / xdg-open). The official
+      // host.openPath powershell Invoke-Item does not surface a window in
+      // every session.
+      return connection.rpc.call('/fileexplorer', 'open', { path }, signal)
     },
   }
 }
