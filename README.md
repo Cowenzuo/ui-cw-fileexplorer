@@ -65,8 +65,17 @@ tsdown.config.ts      # node 半 + 浏览器半（CSS Modules 内容哈希）
 
 ### 加载与开发
 
+仓库只跟踪**源码与配置**：`node_modules/`（依赖）、`lib/`（构建产物）和 `*.tgz`
+（打包临时物）均不入库（见 `.gitignore`）。首次拉取后需自行两步：
+
 ```sh
-pnpm install && pnpm build        # 产物：lib/index.js + lib/client.js
+pnpm install   # 拉取 npm 依赖（版本由 pnpm-lock.yaml 锁定）
+pnpm build     # 生成产物 lib/index.js + lib/client.js
+```
+
+其余常用命令：
+
+```sh
 pnpm typecheck                    # tsc --noEmit
 pnpm test                         # vitest（33 个：解析/端点/真仓库集成）
 pnpm build:watch                  # client 面 watch → HMR 热更
