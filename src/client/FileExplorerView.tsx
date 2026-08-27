@@ -417,7 +417,15 @@ export function FileExplorerDock(
                         className={css.openButton}
                         aria-label={t('open.folder')}
                         title={`${t('open.folder')}：${listing.path}`}
-                        onClick={() => { void handleOpenInSystem() }}
+                        onClick={(event) => {
+                          // Drop focus immediately: the Explorer window takes
+                          // the foreground, and the browser restores focus to
+                          // this button in keyboard mode when the window is
+                          // re-activated — leaving a stuck focus ring. A
+                          // blurred button cannot keep one.
+                          event.currentTarget.blur()
+                          void handleOpenInSystem()
+                        }}
                       >
                         <IconFolderOpen16 size={14} />
                       </button>

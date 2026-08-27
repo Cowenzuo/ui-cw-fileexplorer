@@ -199,6 +199,19 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* A mouse click keeps :focus on the button after the Explorer window takes
+   over the foreground, leaving a stuck focus ring on the page. Draw an
+   outline only for keyboard navigation (:focus-visible); a click must not
+   leave any focus residue. */
+.openButton:focus {
+  outline: none;
+}
+
+.openButton:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
 .crumbs {
   /* Never shrinks: when the auxiliary panel squeezes the body, the
      navigation keeps its single line and the list scrolls instead. */
