@@ -253,11 +253,22 @@ export function FileExplorerDock(
   /** Reveal the navigated folder; a refusal surfaces as a transient error. */
   const handleOpenInSystem = async (): Promise<void> => {
     if (listing === undefined) return
-    const result = await openInSystem(listing.path, new AbortController().signal)
-    if (result.ok) return
-    setOpenError(result.error.message)
-    window.clearTimeout(openErrorTimer.current)
-    openErrorTimer.current = window.setTimeout(() => { setOpenError(null) }, 3_000)
+    console.log('[fileexplorer] open clicked, listing.path =', JSON.stringify(listing.path))
+    try {
+      const result = await openInSystem(listing.path, new AbortController().signal)
+      console.log('[fileexplorer] open rpc result =', JSON.stringify(result))
+      if (result.ok) return
+      setOpenError(result.error.message)
+      window.clearTimeout(openErrorTimer.current)
+      openErrorTimer.current = window.setTimeout(() => { setOpenError(null) }, 3_000)
+    } catch (error) {
+      // A transport-level failure (HTTP status, parse error) never yields an
+      // RpcResult — log it and surface the same transient error line.
+      console.error('[fileexplorer] open rpc threw =', error)
+      setOpenError(error instanceof Error ? error.message : String(error))
+      window.clearTimeout(openErrorTimer.current)
+      openErrorTimer.current = window.setTimeout(() => { setOpenError(null) }, 3_000)
+    }
   }
 
   // Re-root only when the WORKSPACE changes (a different session in the same

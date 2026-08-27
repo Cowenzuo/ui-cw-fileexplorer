@@ -68,7 +68,7 @@ tsdown.config.ts      # node 半 + 浏览器半（CSS Modules 内容哈希）
 pnpm install && pnpm build        # 产物：lib/index.js + lib/client.js
 dsh plugin --profile web add .    # 装入 profile（bundle 机制）
 pnpm typecheck                    # tsc --noEmit
-pnpm test                         # vitest（28 个：解析/端点/真仓库集成）
+pnpm test                         # vitest（30 个：解析/端点/真仓库集成）
 pnpm build:watch                  # client 面 watch → HMR 热更
 ```
 
@@ -82,6 +82,11 @@ pnpm build:watch                  # client 面 watch → HMR 热更
 - 删除回填条目无大小信息
 - 轮询刷新（2s），非事件推送
 - 布局状态（宽度/比例/展开）刷新后重置
+- 打开目录：未打开时经 `Shell.Application.Explore` 新建并激活窗口；已打开时
+  （Explore 只会激活旧窗口，后台服务激活被前台锁拒绝）改走
+  `explorer.exe /n,/e` 强制新建窗口；均先模拟 Alt 输入获得前台资格。
+  个别受限会话（窗口站隔离、更高权限进程抢占）下仍可能退化为后台打开，
+  窗口任务栏可见
 
 ---
 

@@ -138,37 +138,82 @@ export function runGitCommand(root: string, args: readonly string[], signal: Abo
 }
 
 /**
- * Default native opener: a direct spawn of the platform's file manager —
- * explorer.exe on Windows (the official host.openPath's powershell
- * Invoke-Item does not surface a window in every session), `open` on macOS,
- * `xdg-open` on Linux.
+ * Default native opener.
+ *
+ * Windows: one COM/startup call that opens the folder AND activates its
+ * window. The foreground lock refuses windows raised by processes that never
+ * received input, so the helper first synthesizes one Alt key press (WScript
+ * SendKeys): the system then treats this process as the last-input process
+ * and grants it foreground permission.
+ *
+ * - Folder not open yet: `Shell.Application.Explore(path)` opens and raises
+ *   a new window.
+ * - Folder already open: Explore would only try to focus the existing window,
+ *   and that activation from a background service is refused by the
+ *   foreground lock — so `/n,/e` forces a brand-new window instead, which
+ *   opens raised.
+ *
+ * Plain COM needs no P/Invoke, so it also survives restricted PowerShell 5.1
+ * environments where Add-Type (which shells out to csc.exe) is blocked. The
+ * official host.openPath's powershell Invoke-Item does not surface a window
+ * in every session, so this channel owns the open.
+ *
+ * macOS / Linux: `open` / `xdg-open` direct spawns.
  */
 export function runOpenCommand(path: string, signal: AbortSignal): Promise<{ code: number | null; stderr: string }> {
-  const command = process.platform === 'win32'
-    ? { file: 'explorer.exe', args: [path] }
-    : process.platform === 'darwin'
-      ? { file: 'open', args: [path] }
-      : { file: 'xdg-open', args: [path] }
+  if (process.platform === 'win32') {
+    const script = [
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+      "$ErrorActionPreference = 'Stop'",
+      'try {',
+      `  $want = '${path.replaceAll("'", "''")}'.TrimEnd([char]92).ToLowerInvariant()`,
+      '  $shell = New-Object -ComObject Shell.Application',
+      '  $before = @($shell.Windows() | Where-Object { try { $_.Document.Folder.Self.Path.TrimEnd([char]92).ToLowerInvariant() -eq $want } catch { $false } }).Count',
+      '  Write-Output "WINDOWS_BEFORE=$before"',
+      "  (New-Object -ComObject WScript.Shell).SendKeys('%')",
+      '  Start-Sleep -Milliseconds 80',
+      '  if ($before -gt 0) {',
+      `    Start-Process explorer.exe -ArgumentList "/n,/e,${path.replaceAll('"', '""')}"`,
+      '  } else {',
+      `    $shell.Explore('${path.replaceAll("'", "''")}')`,
+      '  }',
+      '  Start-Sleep -Milliseconds 800',
+      '  $after = @($shell.Windows() | Where-Object { try { $_.Document.Folder.Self.Path.TrimEnd([char]92).ToLowerInvariant() -eq $want } catch { $false } }).Count',
+      '  Write-Output "WINDOWS_AFTER=$after"',
+      "  Write-Output 'OPENED'",
+      '} catch {',
+      "  Write-Output ('OPEN_FAILED: ' + $_.Exception.Message)",
+      '  exit 1',
+      '}',
+      'exit 0',
+    ].join('\n')
+    return new Promise((resolve) => {
+      const child = spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+        { windowsHide: true },
+      )
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+      child.on('error', (error) => { resolve({ code: null, stderr: error.message }) })
+      child.on('close', (code) => {
+        // The window counters tell whether Explore reused an existing window
+        // (BEFORE == AFTER) or created a new one — visible in the server log.
+        console.log('[fileexplorer] open helper stdout =', JSON.stringify(stdout))
+        resolve({ code: code ?? -1, stderr })
+      })
+      signal.addEventListener('abort', () => { child.kill() }, { once: true })
+    })
+  }
+  const command = process.platform === 'darwin' ? { file: 'open', args: [path] } : { file: 'xdg-open', args: [path] }
   return new Promise((resolve) => {
-    // explorer.exe must NOT be spawned with windowsHide (CREATE_NO_WINDOW):
-    // it then skips creating its window entirely.
-    const child = spawn(
-      command.file,
-      command.args,
-      process.platform === 'win32' ? undefined : { windowsHide: true },
-    )
+    const child = spawn(command.file, command.args, { windowsHide: true })
     let stderr = ''
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
     child.on('error', (error) => { resolve({ code: null, stderr: error.message }) })
-    child.on('close', (code) => {
-      if (process.platform === 'win32') {
-        // explorer.exe forwards the open request to the running instance and
-        // exits nonzero — that is the normal success path, not a failure.
-        resolve({ code: 0, stderr })
-      } else {
-        resolve({ code: code ?? -1, stderr })
-      }
-    })
+    child.on('close', (code) => { resolve({ code: code ?? -1, stderr }) })
     signal.addEventListener('abort', () => { child.kill() }, { once: true })
   })
 }
@@ -362,8 +407,10 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
   const runOpen = options.runOpen ?? runOpenCommand
   return async (endpoint, payload, signal): Promise<RpcResult<unknown>> => {
     if (endpoint === 'open') {
+      console.log('[fileexplorer] open endpoint hit, payload =', JSON.stringify(payload))
       const openPath = (payload as { path?: unknown } | null)?.path
       if (typeof openPath !== 'string' || !isQualifiedAbsolutePath(openPath)) {
+        console.log('[fileexplorer] open rejected, path =', JSON.stringify(openPath))
         return {
           ok: false,
           error: {
@@ -374,6 +421,7 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
         }
       }
       const opened = await runOpen(openPath, signal)
+      console.log('[fileexplorer] open runOpen code =', opened.code, 'stderr =', JSON.stringify(opened.stderr))
       if (opened.code !== 0) {
         return {
           ok: false,
