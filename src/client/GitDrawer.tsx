@@ -45,6 +45,8 @@ export function GitDrawer(props: {
   const [viewRef, setViewRef] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  // Commit whose message body is expanded under its row; null = none.
+  const [expandedHash, setExpandedHash] = useState<string | null>(null)
   const fingerprintRef = useRef<string>('')
   const noticeTimer = useRef<number | undefined>(undefined)
   // External-change watch: the last branch/tip seen; null suppresses the
@@ -179,21 +181,37 @@ export function GitDrawer(props: {
               {snapshot.commits.map(commit => {
                 const isHead = snapshot.headHash !== null && commit.hash === snapshot.headHash
                 const isRemote = snapshot.remoteHead !== null && commit.hash === snapshot.remoteHead
+                const expanded = expandedHash === commit.hash
                 return (
-                  <li key={commit.hash} className={css.row} title={commit.subject}>
-                    {isHead && (
-                      <span className={clsx(css.tag, css.tagHead)} title={t('git.tag.head')}>
-                        <IconDataOutline16 size={11} />
-                      </span>
+                  <li
+                    key={commit.hash}
+                    className={clsx(css.row, expanded && css.rowExpanded)}
+                    title={commit.subject}
+                    onClick={() => {
+                      // Rows without a body have nothing to expand.
+                      if (commit.body !== undefined) {
+                        setExpandedHash(expanded ? null : commit.hash)
+                      }
+                    }}
+                  >
+                    <div className={css.rowLine}>
+                      {isHead && (
+                        <span className={clsx(css.tag, css.tagHead)} title={t('git.tag.head')}>
+                          <IconDataOutline16 size={11} />
+                        </span>
+                      )}
+                      {isRemote && (
+                        <span className={clsx(css.tag, css.tagRemote)} title={snapshot.upstream ?? t('git.tag.remote')}>
+                          <IconGlobeOutline14 size={11} />
+                        </span>
+                      )}
+                      <span className={css.hash}>{commit.hash}</span>
+                      <span className={css.subject}>{commit.subject}</span>
+                      {commit.date !== undefined && <span className={css.date}>{commit.date}</span>}
+                    </div>
+                    {expanded && commit.body !== undefined && (
+                      <div className={css.bodyText}>{commit.body}</div>
                     )}
-                    {isRemote && (
-                      <span className={clsx(css.tag, css.tagRemote)} title={snapshot.upstream ?? t('git.tag.remote')}>
-                        <IconGlobeOutline14 size={11} />
-                      </span>
-                    )}
-                    <span className={css.hash}>{commit.hash}</span>
-                    <span className={css.subject}>{commit.subject}</span>
-                    {commit.date !== undefined && <span className={css.date}>{commit.date}</span>}
                   </li>
                 )
               })}

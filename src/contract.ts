@@ -100,12 +100,14 @@ export interface FileExplorerOpenResult {
   throttled?: boolean
 }
 
-/** One compact commit row: short hash, subject, short date. */
+/** One compact commit row: short hash, subject, short date, optional body. */
 export interface GitCommitRow {
   hash: string
   subject: string
   /** YYYY-MM-DD (git --date=short); absent when the log format did not carry it. */
   date?: string
+  /** Commit-message body (may span lines); absent when the commit has none. */
+  body?: string
 }
 
 /**

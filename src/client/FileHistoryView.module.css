@@ -46,8 +46,7 @@
 
 .row {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  flex-direction: column;
   padding: 2px 6px;
   border-radius: 6px;
   min-width: 0;
@@ -57,6 +56,31 @@
 
 .row:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The commit's compact one-line face (tags + hash + subject + date). */
+.rowLine {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rowExpanded {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Expanded commit-message body under the row: indented, wraps, selectable. */
+.bodyText {
+  margin: 1px 0 3px 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }
 
 /* Latest-change tag (blue, same as the git HEAD marker). */

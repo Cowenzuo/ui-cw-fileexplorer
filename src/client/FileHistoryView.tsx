@@ -35,6 +35,8 @@ export function FileHistoryView(props: {
 }): React.JSX.Element {
   const { root, file, expanded, fileHistory, t } = props
   const [snapshot, setSnapshot] = useState<FileHistorySnapshot | undefined>(undefined)
+  // Commit whose message body is expanded under its row; null = none.
+  const [expandedHash, setExpandedHash] = useState<string | null>(null)
   const fingerprintRef = useRef<string>('')
 
   useEffect(() => {
@@ -88,18 +90,36 @@ export function FileHistoryView(props: {
           <div className={css.message}>{t('history.empty.commits')}</div>
         ) : (
           <ul className={css.list}>
-            {snapshot.commits.map((commit, index) => (
-              <li key={commit.hash} className={css.row} title={commit.subject}>
-                {index === 0 && (
-                  <span className={clsx(css.tag, css.tagLatest)} title={t('git.tag.head')}>
-                    <IconDataOutline16 size={11} />
-                  </span>
-                )}
-                <span className={css.hash}>{commit.hash}</span>
-                <span className={css.subject}>{commit.subject}</span>
-                {commit.date !== undefined && <span className={css.date}>{commit.date}</span>}
-              </li>
-            ))}
+            {snapshot.commits.map((commit, index) => {
+              const expanded = expandedHash === commit.hash
+              return (
+                <li
+                  key={commit.hash}
+                  className={clsx(css.row, expanded && css.rowExpanded)}
+                  title={commit.subject}
+                  onClick={() => {
+                    // Rows without a body have nothing to expand.
+                    if (commit.body !== undefined) {
+                      setExpandedHash(expanded ? null : commit.hash)
+                    }
+                  }}
+                >
+                  <div className={css.rowLine}>
+                    {index === 0 && (
+                      <span className={clsx(css.tag, css.tagLatest)} title={t('git.tag.head')}>
+                        <IconDataOutline16 size={11} />
+                      </span>
+                    )}
+                    <span className={css.hash}>{commit.hash}</span>
+                    <span className={css.subject}>{commit.subject}</span>
+                    {commit.date !== undefined && <span className={css.date}>{commit.date}</span>}
+                  </div>
+                  {expanded && commit.body !== undefined && (
+                    <div className={css.bodyText}>{commit.body}</div>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>

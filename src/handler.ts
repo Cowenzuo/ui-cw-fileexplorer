@@ -220,17 +220,24 @@ export function runOpenCommand(path: string, signal: AbortSignal): Promise<{ cod
 }
 
 /**
- * Parse `git log --pretty=format:%h%x1f%s%x1f%ad` output into commit rows.
- * The unit separator keeps subjects with spaces intact; a line without the
- * hash/subject pair is skipped defensively.
+ * Parse `git log --pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e` output into
+ * commit rows. Unit separators keep hash/subject/date/body fields apart (the
+ * body may span lines); the record separator closes one commit. A record
+ * without the hash/subject pair is skipped defensively.
  */
 export function parseGitLog(output: string): GitCommitRow[] {
   const rows: GitCommitRow[] = []
-  for (const line of output.split('\n')) {
-    if (line === '') continue
-    const [hash, subject, date] = line.split('\x1f')
+  for (const record of output.split('\x1e')) {
+    if (record === '') continue
+    const [hash, subject, date, ...bodyParts] = record.split('\x1f')
     if (hash === undefined || subject === undefined) continue
-    rows.push({ hash, subject, date: date === undefined || date === '' ? undefined : date })
+    const body = bodyParts.length > 0 ? bodyParts.join('\x1f').trim() : undefined
+    rows.push({
+      hash,
+      subject,
+      date: date === undefined || date === '' ? undefined : date,
+      ...(body === undefined || body === '' ? {} : { body }),
+    })
   }
   return rows
 }
@@ -296,7 +303,7 @@ export async function readGitSnapshot(
   if (upstreamOut.code === 0 && upstreamOut.stdout.trim() !== '') remoteHead = upstreamOut.stdout.trim()
   const logOut = await run(
     root,
-    ['log', '--pretty=format:%h%x1f%s%x1f%ad', '--date=short', '-n', '20', target],
+    ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', target],
     signal,
   )
   const commits = logOut.code === 0 ? parseGitLog(logOut.stdout) : []
@@ -390,7 +397,7 @@ export async function readFileHistory(
   const rel = relative(root, path).split('\\').join('/')
   const logOut = await run(
     root,
-    ['log', '--pretty=format:%h%x1f%s%x1f%ad', '--date=short', '-n', '20', 'HEAD', '--', rel],
+    ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', 'HEAD', '--', rel],
     signal,
   )
   return { ok: true, commits: logOut.code === 0 ? parseGitLog(logOut.stdout) : [] }

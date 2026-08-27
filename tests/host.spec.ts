@@ -234,18 +234,27 @@ describe('fileexplorer list', () => {
 describe('git snapshot', () => {
   it('parses git log pretty output into commit rows', () => {
     const output = [
-      'abc1234\u001fFix the thing\u001f2026-08-20',
-      'def5678\u001fAdd feature with spaces\u001f2026-08-19',
+      'abc1234\u001fFix the thing\u001f2026-08-20\u001f',
+      'def5678\u001fAdd feature with spaces\u001f2026-08-19\u001f',
       '',
-    ].join('\n')
+    ].join('\u001e')
     expect(parseGitLog(output)).toEqual([
       { hash: 'abc1234', subject: 'Fix the thing', date: '2026-08-20' },
       { hash: 'def5678', subject: 'Add feature with spaces', date: '2026-08-19' },
     ])
   })
 
-  it('parses log lines without a date gracefully', () => {
-    expect(parseGitLog('abc1234\u001fNo date')).toEqual([{ hash: 'abc1234', subject: 'No date', date: undefined }])
+  it('parses multi-line commit bodies and trims their edges', () => {
+    const output = 'abc1234\u001fFix thing\u001f2026-08-20\u001f1. first line\n2. second line\n\u001e'
+    expect(parseGitLog(output)).toEqual([
+      { hash: 'abc1234', subject: 'Fix thing', date: '2026-08-20', body: '1. first line\n2. second line' },
+    ])
+  })
+
+  it('omits the body field for commits without a description', () => {
+    expect(parseGitLog('abc1234\u001fNo date\u001f\u001f')).toEqual([
+      { hash: 'abc1234', subject: 'No date', date: undefined },
+    ])
   })
 
   it('parses git status branch lines', () => {
@@ -267,7 +276,7 @@ describe('git snapshot', () => {
       if (args[0] === 'for-each-ref') return { code: 0, stdout: 'main\nfeature/x\n', stderr: '' }
       if (args[0] === 'status') return { code: 0, stdout: '## main...origin/main [ahead 1]\n', stderr: '' }
       if (args[0] === 'rev-parse' && args[1] === '--short') return { code: 0, stdout: 'abc1234\n', stderr: '' }
-      return { code: 0, stdout: 'def5678\u001fLocal commit\u001f2026-08-19\nabc1234\u001fCloud commit\u001f2026-08-20\n', stderr: '' }
+      return { code: 0, stdout: 'def5678\u001fLocal commit\u001f2026-08-19\u001f\u001eabc1234\u001fCloud commit\u001f2026-08-20\u001f\u001e', stderr: '' }
     }
     const result = await createFileExplorerHandler({ runGit })('git', { root }, new AbortController().signal)
     expect(result).toEqual({
@@ -292,7 +301,7 @@ describe('git snapshot', () => {
       ['for-each-ref', '--format=%(refname:short)', 'refs/heads'],
       ['status', '-sb'],
       ['rev-parse', '--short', 'HEAD@{upstream}'],
-      ['log', '--pretty=format:%h%x1f%s%x1f%ad', '--date=short', '-n', '20', 'HEAD'],
+      ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', 'HEAD'],
     ])
   })
 
@@ -305,7 +314,7 @@ describe('git snapshot', () => {
       if (args[0] === 'rev-parse' && args[1] === '--short') return { code: 1, stdout: '', stderr: 'no upstream' }
       if (args[0] === 'log') {
         logs.push([...args])
-        return { code: 0, stdout: '1111111\u001ffeature commit\u001f2026-08-18\n', stderr: '' }
+        return { code: 0, stdout: '1111111\u001ffeature commit\u001f2026-08-18\u001f\u001e', stderr: '' }
       }
       return { code: 0, stdout: '', stderr: '' }
     }
@@ -343,7 +352,7 @@ describe('git snapshot', () => {
     const runGit: RunGit = async (_root, args) => {
       calls.push([...args])
       if (args[0] === 'rev-parse') return { code: 0, stdout: 'true\n', stderr: '' }
-      return { code: 0, stdout: 'aaa1111\u001fadded feature\u001f2026-08-20\nbbb2222\u001finitial file\u001f2026-08-19\n', stderr: '' }
+      return { code: 0, stdout: 'aaa1111\u001fadded feature\u001f2026-08-20\u001f\u001ebbb2222\u001finitial file\u001f2026-08-19\u001f\u001e', stderr: '' }
     }
     const target = join(root, 'src', 'a.txt')
     const result = await createFileExplorerHandler({ runGit })('file-history', { root, path: target }, new AbortController().signal)
@@ -358,7 +367,7 @@ describe('git snapshot', () => {
       },
     })
     // The path arrives as a root-relative forward-slash pathspec.
-    expect(calls.at(-1)).toEqual(['log', '--pretty=format:%h%x1f%s%x1f%ad', '--date=short', '-n', '20', 'HEAD', '--', 'src/a.txt'])
+    expect(calls.at(-1)).toEqual(['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', 'HEAD', '--', 'src/a.txt'])
   })
 
   it('rejects a file-history path outside the locked root', async () => {
