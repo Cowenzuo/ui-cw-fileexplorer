@@ -37,6 +37,10 @@ export const zh = {
   'git.select-branch': '选择分支',
   'git.notice.branch': '分支已切换为 {name}',
   'git.notice.head': '分支有新提交',
+  'git.more': '加载更多提交',
+  'git.more.loading': '加载中…',
+  'history.more': '加载更多',
+  'history.more.loading': '加载中…',
 } as const
 
 export const en = {
@@ -70,6 +74,10 @@ export const en = {
   'git.select-branch': 'Select branch',
   'git.notice.branch': 'Branch switched to {name}',
   'git.notice.head': 'New commits on the branch',
+  'git.more': 'Load more commits',
+  'git.more.loading': 'Loading…',
+  'history.more': 'Load more',
+  'history.more.loading': 'Loading…',
 } as const
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

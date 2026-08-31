@@ -11,7 +11,7 @@
  */
 import { spawn } from 'node:child_process'
 import { readdir, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, parse, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, normalize, parse, relative } from 'node:path'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import type {
@@ -42,6 +42,31 @@ export type RunOpen = (path: string, signal: AbortSignal) => Promise<{ code: num
 
 /** Default per-path cooldown between two opens of the same directory. */
 export const OPEN_COOLDOWN_MS = 1200
+
+/** Git-log default page size (the client may submit its own `limit`). */
+export const GIT_PAGE_SIZE = 20
+/** Hard ceiling for a submitted `limit` (protects the host from huge pages). */
+export const GIT_MAX_LIMIT = 100
+
+/** Git working-tree state cache TTL per listed level (ms). */
+export const GIT_CACHE_TTL_MS = 1_500
+/** Git working-tree state cache capacity (oldest entry evicted beyond it). */
+export const GIT_CACHE_MAX = 32
+
+/** Cached git resolution for one listed level. */
+export interface GitLevelState {
+  repoRoot: string | null
+  statuses: ReadonlyMap<string, 'M' | 'D' | 'A'>
+  gitlinks: ReadonlySet<string>
+  /** Epoch ms of the resolution (TTL freshness). */
+  at: number
+}
+
+/** Clamp a client-submitted page size into [1, GIT_MAX_LIMIT]. */
+export function clampGitLimit(limit: number | undefined): number {
+  if (typeof limit !== 'number' || !Number.isFinite(limit)) return GIT_PAGE_SIZE
+  return Math.min(Math.max(1, Math.floor(limit)), GIT_MAX_LIMIT)
+}
 
 export interface FileExplorerHandlerOptions {
   /** Complete-result bound; a cut level keeps the name-sorted head (mirrors the directory picker's maxEntries). */
@@ -277,10 +302,12 @@ export async function readGitSnapshot(
   run: RunGit,
   signal: AbortSignal,
   ref?: string,
+  skip = 0,
+  limit = GIT_PAGE_SIZE,
 ): Promise<GitSnapshot> {
   const workTree = await run(root, ['rev-parse', '--is-inside-work-tree'], signal)
   if (workTree.code !== 0) {
-    const base = { branch: null, upstream: null, ahead: 0, behind: 0, branches: [], headHash: null, remoteHead: null, commits: [] }
+    const base = { branch: null, upstream: null, ahead: 0, behind: 0, branches: [], headHash: null, remoteHead: null, commits: [], total: 0 }
     return workTree.code === null
       ? { ok: false, reason: 'no-git', message: workTree.stderr, ...base }
       : { ok: false, reason: 'not-repo', message: workTree.stderr.trim(), ...base }
@@ -303,12 +330,20 @@ export async function readGitSnapshot(
   if (upstreamOut.code === 0 && upstreamOut.stdout.trim() !== '') remoteHead = upstreamOut.stdout.trim()
   const logOut = await run(
     root,
-    ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', target],
+    ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', String(limit), `--skip=${skip}`, target],
     signal,
   )
   const commits = logOut.code === 0 ? parseGitLog(logOut.stdout) : []
-  // The log is newest-first, so its first row is the viewed branch's tip.
+  // The page is newest-first, so its first row is the viewed branch's tip.
   const headHash = commits[0]?.hash ?? null
+  // Total reachable commits: drives the "load more" affordance. The count is
+  // best-effort — a failure only hides the button.
+  let total = commits.length
+  const countOut = await run(root, ['rev-list', '--count', target], signal)
+  if (countOut.code === 0 && countOut.stdout.trim() !== '') {
+    const parsed = Number(countOut.stdout.trim())
+    if (Number.isFinite(parsed) && parsed >= 0) total = parsed
+  }
   return {
     ok: true,
     branch: status.branch,
@@ -319,6 +354,7 @@ export async function readGitSnapshot(
     headHash,
     remoteHead,
     commits,
+    total,
   }
 }
 
@@ -371,6 +407,9 @@ export function parsePorcelainStatus(output: string): Map<string, 'M' | 'D' | 'A
     const arrow = path.indexOf(' -> ')
     if (arrow >= 0) path = path.slice(arrow + 4)
     if (path === '') continue
+    // Untracked directories keep their trailing slash (`?? newdir/`): the
+    // slash distinguishes a DIRECTORY entry (a nested repo or untracked dir,
+    // whose own contents are not this repo's changes) from a FILE change.
     let state: 'M' | 'D' | 'A'
     if (code.includes('D')) state = 'D'
     else if (code.includes('M') || code.includes('T') || code.includes('R') || code.includes('C') || code.includes('U')) state = 'M'
@@ -380,27 +419,76 @@ export function parsePorcelainStatus(output: string): Map<string, 'M' | 'D' | 'A
   return map
 }
 
+/**
+ * Whether any FILE-level porcelain row lives under `dirPath` (repo-root-
+ * relative prefix match) — a directory whose subtree contains uncommitted
+ * changes gets an aggregate M badge. DIRECTORY entries under it (keys with a
+ * trailing slash — untracked dirs) and GITLINKS (nested repos recorded in
+ * the parent index — their changes belong to themselves) do NOT count.
+ */
+export function dirSubtreeChanged(
+  repoRoot: string,
+  dirPath: string,
+  statuses: ReadonlyMap<string, 'M' | 'D' | 'A'>,
+  gitlinks: ReadonlySet<string> = EMPTY_GITLINKS,
+): boolean {
+  const prefix = relative(repoRoot, dirPath).split('\\').join('/') + '/'
+  for (const key of statuses.keys()) {
+    if (key.endsWith('/')) continue
+    if (gitlinks.has(key)) continue
+    if (key.startsWith(prefix)) return true
+  }
+  return false
+}
+
+const EMPTY_GITLINKS: ReadonlySet<string> = new Set()
+
+/**
+ * Parse `git ls-files -s` into the set of gitlink paths (mode 160000 = a
+ * nested repository recorded in the index). Porcelain v1 renders a dirty
+ * gitlink exactly like a modified file (` M path`), so the modes are needed
+ * to keep a parent folder from wearing a badge for its nested repos.
+ */
+export function parseGitlinks(output: string): Set<string> {
+  const links = new Set<string>()
+  for (const line of output.split('\n')) {
+    const match = /^160000 [0-9a-f]{40} \d+\t(.+)$/.exec(line)
+    if (match !== null && match[1] !== undefined) links.add(match[1])
+  }
+  return links
+}
+
 /** Build the read-only commit history for one file inside the root. */
 export async function readFileHistory(
   root: string,
   path: string,
   run: RunGit,
   signal: AbortSignal,
+  skip = 0,
+  limit = GIT_PAGE_SIZE,
 ): Promise<FileHistorySnapshot> {
   const workTree = await run(root, ['rev-parse', '--is-inside-work-tree'], signal)
   if (workTree.code !== 0) {
     return workTree.code === null
-      ? { ok: false, reason: 'no-git', message: workTree.stderr, commits: [] }
-      : { ok: false, reason: 'not-repo', message: workTree.stderr.trim(), commits: [] }
+      ? { ok: false, reason: 'no-git', message: workTree.stderr, commits: [], total: 0 }
+      : { ok: false, reason: 'not-repo', message: workTree.stderr.trim(), commits: [], total: 0 }
   }
   // git expects forward slashes for pathspecs.
   const rel = relative(root, path).split('\\').join('/')
   const logOut = await run(
     root,
-    ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', 'HEAD', '--', rel],
+    ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', String(limit), `--skip=${skip}`, 'HEAD', '--', rel],
     signal,
   )
-  return { ok: true, commits: logOut.code === 0 ? parseGitLog(logOut.stdout) : [] }
+  const commits = logOut.code === 0 ? parseGitLog(logOut.stdout) : []
+  // Total commits touching the file: drives the "load more" affordance.
+  let total = commits.length
+  const countOut = await run(root, ['rev-list', '--count', 'HEAD', '--', rel], signal)
+  if (countOut.code === 0 && countOut.stdout.trim() !== '') {
+    const parsed = Number(countOut.stdout.trim())
+    if (Number.isFinite(parsed) && parsed >= 0) total = parsed
+  }
+  return { ok: true, commits, total }
 }
 
 /**
@@ -418,6 +506,9 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
   // concurrent bursts coalesce too) and removed when it fails (retry stays
   // immediate). Coalesced calls never refresh the timestamp.
   const lastOpenAt = new Map<string, number>()
+  // Per-level git-state cache (see the list endpoint): a short TTL absorbs
+  // the 2s client poll, pathspec scoping keeps deep levels cheap.
+  const gitCache = new Map<string, GitLevelState>()
   return async (endpoint, payload, signal): Promise<RpcResult<unknown>> => {
     if (endpoint === 'open') {
       const openPath = (payload as { path?: unknown } | null)?.path
@@ -485,7 +576,10 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
       if (signal.aborted) {
         return { ok: false, error: { code: 'cancelled', message: 'fileexplorer history was aborted', details: {} } }
       }
-      return { ok: true, value: await readFileHistory(historyRoot, historyPath, runGit, signal) }
+      const historySkip = historyPayload?.skip
+      const skip = typeof historySkip === 'number' && Number.isInteger(historySkip) && historySkip > 0 ? historySkip : 0
+      const limit = clampGitLimit(historyPayload?.limit)
+      return { ok: true, value: await readFileHistory(historyRoot, historyPath, runGit, signal, skip, limit) }
     }
     if (endpoint === 'git') {
       const gitPayload = payload as FileExplorerGitRequest | null
@@ -501,8 +595,11 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
         }
       }
       const ref = typeof gitPayload?.ref === 'string' && gitPayload.ref !== '' ? gitPayload.ref : undefined
+      const gitSkip = gitPayload?.skip
+      const skip = typeof gitSkip === 'number' && Number.isInteger(gitSkip) && gitSkip > 0 ? gitSkip : 0
+      const limit = clampGitLimit(gitPayload?.limit)
       if (signal.aborted) return { ok: false, error: { code: 'cancelled', message: 'fileexplorer git was aborted', details: {} } }
-      return { ok: true, value: await readGitSnapshot(gitRoot, runGit, signal, ref) }
+      return { ok: true, value: await readGitSnapshot(gitRoot, runGit, signal, ref, skip, limit) }
     }
     if (endpoint !== 'list') {
       return {
@@ -552,11 +649,60 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
       }
     }
     // Git working-tree state for the listed level, when requested and when
-    // git answers (non-repository roots and missing git degrade silently).
+    // git answers. THE CURRENT FOLDER'S OWN REPOSITORY decides: no repo at
+    // this level means no git states here at all (subdirectory repos keep
+    // their own states when browsed into). Porcelain paths are
+    // REPO-ROOT-relative regardless of the cwd, so the repository root is
+    // resolved first and every lookup/back-in keys on it.
+    //
+    // Efficiency: the resolution is CACHED per level for a short TTL (the
+    // client polls every ~2s, so the cache halves the git spawns with no
+    // visible staleness), the porcelain/ls-files calls are PATHSCOPED to the
+    // level's subtree (deep browsing diffs only that subtree, not the whole
+    // repo), and ls-files is skipped entirely on clean levels.
+    let gitRepoRoot: string | null = null
     let gitStatuses: ReadonlyMap<string, 'M' | 'D' | 'A'> = new Map()
+    let gitlinks: ReadonlySet<string> = new Set()
     if (wantGit) {
-      const statusOut = await runGit(root, ['status', '--porcelain'], signal)
-      if (statusOut.code === 0) gitStatuses = parsePorcelainStatus(statusOut.stdout)
+      const cacheKey = process.platform === 'win32' ? root.toLowerCase() : root
+      const cached = gitCache.get(cacheKey)
+      if (cached !== undefined && Date.now() - cached.at < GIT_CACHE_TTL_MS) {
+        gitRepoRoot = cached.repoRoot
+        gitStatuses = cached.statuses
+        gitlinks = cached.gitlinks
+      } else {
+        const topOut = await runGit(root, ['rev-parse', '--show-toplevel'], signal)
+        // git prints the toplevel with forward slashes on Windows; normalize
+        // to the platform form before any comparison.
+        const top = topOut.code === 0 && topOut.stdout.trim() !== '' ? normalize(topOut.stdout.trim()) : ''
+        gitRepoRoot = top !== '' && isWithin(top, root) ? top : null
+        if (gitRepoRoot !== null) {
+          const rel = relative(gitRepoRoot, root).split('\\').join('/')
+          const scope = rel === '' ? [] : ['--', rel]
+          const statusOut = await runGit(root, ['status', '--porcelain', ...scope], signal)
+          if (statusOut.code === 0) gitStatuses = parsePorcelainStatus(statusOut.stdout)
+          // Gitlink paths (nested repos recorded in the index): their dirty
+          // state belongs to themselves, never to a parent folder's badge.
+          // Only needed when the status actually has rows.
+          if (gitStatuses.size > 0) {
+            const lsOut = await runGit(root, ['ls-files', '-s', ...scope], signal)
+            if (lsOut.code === 0) gitlinks = parseGitlinks(lsOut.stdout)
+          }
+        }
+        // Bounded cache: drop the oldest entry when over capacity.
+        if (gitCache.size >= GIT_CACHE_MAX) {
+          let oldestKey: string | undefined
+          let oldestAt = Number.POSITIVE_INFINITY
+          for (const [key, entry] of gitCache) {
+            if (entry.at < oldestAt) {
+              oldestAt = entry.at
+              oldestKey = key
+            }
+          }
+          if (oldestKey !== undefined) gitCache.delete(oldestKey)
+        }
+        gitCache.set(cacheKey, { repoRoot: gitRepoRoot, statuses: gitStatuses, gitlinks, at: Date.now() })
+      }
     }
     // Directories first, name-sorted within each kind.
     const rows = dirents
@@ -602,7 +748,21 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
           continue
         }
       }
-      const gitState = gitStatuses.get(relative(root, row.path).split('\\').join('/'))
+      // File rows carry their exact porcelain state; directory rows get an
+      // aggregate M when their subtree has file-level changes (gitlinks and
+      // untracked directory entries excluded) — the direct state wins when
+      // the directory row itself is listed (e.g. an untracked dir).
+      let gitState: 'M' | 'D' | 'A' | undefined
+      if (kind === 'dir') {
+        if (gitRepoRoot !== null) {
+          const rel = relative(gitRepoRoot, row.path).split('\\').join('/')
+          gitState = gitStatuses.get(rel) ?? gitStatuses.get(`${rel}/`) ?? (dirSubtreeChanged(gitRepoRoot, row.path, gitStatuses, gitlinks) ? 'M' : undefined)
+        }
+      } else {
+        gitState = gitRepoRoot === null
+          ? undefined
+          : gitStatuses.get(relative(gitRepoRoot, row.path).split('\\').join('/'))
+      }
       entries.push({
         name: dirent.name,
         path: row.path,
@@ -616,8 +776,8 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
     // Deleted files no longer exist on disk, so readdir cannot list them —
     // the git status backs them into the level so the explorer can show the
     // red deleted row (kind file, no size).
-    if (lockedRoot !== undefined && wantGit) {
-      const level = lockedRoot === root ? '' : relative(lockedRoot, root).split('\\').join('/')
+    if (gitRepoRoot !== null && lockedRoot !== undefined && wantGit) {
+      const level = relative(gitRepoRoot, root).split('\\').join('/')
       for (const [rel, state] of gitStatuses) {
         if (state !== 'D') continue
         const slash = rel.lastIndexOf('/')

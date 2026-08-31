@@ -44,6 +44,23 @@
   padding: 0;
 }
 
+/* Infinite-scroll sentinel: a tiny bottom marker; entering the viewport
+   fetches the next commit page. */
+.sentinel {
+  flex: none;
+  height: 4px;
+  margin: 2px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sentinelText {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .row {
   display: flex;
   flex-direction: column;

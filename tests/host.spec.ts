@@ -144,6 +144,7 @@ describe('fileexplorer list', () => {
       'R  old.txt -> new.txt', // rename -> modified, keyed by the new path
       'T  type.txt',        // type change -> modified
       'UU conflict.txt',    // unmerged -> modified
+      '?? nested-repo/',    // untracked DIRECTORY (keeps its slash)
     ].join('\n')
     const map = parsePorcelainStatus(output)
     expect(map.get('src/a.txt')).toBe('M')
@@ -155,6 +156,7 @@ describe('fileexplorer list', () => {
     expect(map.get('new.txt')).toBe('M')
     expect(map.get('type.txt')).toBe('M')
     expect(map.get('conflict.txt')).toBe('M')
+    expect(map.get('nested-repo/')).toBe('A')
     expect(map.has('old.txt')).toBe(false)
   })
 
@@ -163,6 +165,7 @@ describe('fileexplorer list', () => {
     await writeFile(join(root, 'new.txt'), 'b')
     const runGit: RunGit = async (_root, args) => {
       if (args[0] === 'status') return { code: 0, stdout: ' M mod.txt\n?? new.txt\n D gone.txt\n', stderr: '' }
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { code: 0, stdout: `${root}\n`, stderr: '' }
       return { code: 1, stdout: '', stderr: 'not a repository' }
     }
     const listing = expectListing(await createFileExplorerHandler({ runGit })(
@@ -179,6 +182,87 @@ describe('fileexplorer list', () => {
     // Without the git flag no status is requested; a failing git degrades silently.
     const plain = expectListing(await createFileExplorerHandler({ runGit })('list', { path: root, root }, new AbortController().signal))
     expect(plain.entries.every(entry => entry.git === undefined)).toBe(true)
+  })
+
+  it('keys porcelain states on the REPO root, so subdirectory levels match too', async () => {
+    const repo = join(root, 'repo')
+    await mkdir(join(repo, 'src', 'client'), { recursive: true })
+    await mkdir(join(repo, 'newdir'), { recursive: true })
+    await writeFile(join(repo, 'src', 'client', 'mod.txt'), 'a')
+    await writeFile(join(repo, 'newdir', 'x.txt'), 'b')
+    const runGit: RunGit = async (_root, args) => {
+      if (args[0] === 'status') return { code: 0, stdout: ' M src/client/mod.txt\n?? newdir/\n D src/old.txt\n', stderr: '' }
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { code: 0, stdout: `${repo}\n`, stderr: '' }
+      return { code: 1, stdout: '', stderr: 'not a repository' }
+    }
+    const handler = createFileExplorerHandler({ runGit })
+    // The repo-root level: a directory whose subtree has changes carries the
+    // aggregate M badge; the untracked directory keeps its direct A.
+    const rootListing = expectListing(await handler('list', { path: repo, root, git: true }, new AbortController().signal))
+    expect(rootListing.entries.find(entry => entry.name === 'src')?.git).toBe('M')
+    expect(rootListing.entries.find(entry => entry.name === 'newdir')?.git).toBe('A')
+    // A subdirectory level: porcelain paths stay repo-root-relative, so the
+    // lookup must translate to the listed level — not miss.
+    const subListing = expectListing(await handler('list', { path: join(repo, 'src', 'client'), root, git: true }, new AbortController().signal))
+    expect(subListing.entries.find(entry => entry.name === 'mod.txt')?.git).toBe('M')
+    // The deleted file is backed into its own level.
+    const srcListing = expectListing(await handler('list', { path: join(repo, 'src'), root, git: true }, new AbortController().signal))
+    expect(srcListing.entries.find(entry => entry.name === 'old.txt')?.git).toBe('D')
+  })
+
+  it('shows no git states at a level without its own repository', async () => {
+    const repo = join(root, 'repo')
+    await mkdir(join(repo, 'src'), { recursive: true })
+    await writeFile(join(repo, 'src', 'mod.txt'), 'a')
+    // The level root is NOT inside any repository: git must not be consulted
+    // for its subdirectory repos — the level has no git states at all.
+    const runGit: RunGit = async () => ({ code: 128, stdout: '', stderr: 'fatal: not a git repository' })
+    const listing = expectListing(await createFileExplorerHandler({ runGit })(
+      'list',
+      { path: root, root, git: true },
+      new AbortController().signal,
+    ))
+    expect(listing.entries.every(entry => entry.git === undefined)).toBe(true)
+  })
+
+  it('does not badge a folder whose only change is a nested repository inside it', async () => {
+    const repo = join(root, 'repo')
+    await mkdir(join(repo, 'holder', 'nested'), { recursive: true })
+    await mkdir(join(repo, 'changed'), { recursive: true })
+    await writeFile(join(repo, 'changed', 'file.txt'), 'a')
+    const runGit: RunGit = async (_dir, args) => {
+      if (args[0] === 'status') return { code: 0, stdout: ' M changed/file.txt\n?? holder/nested/\n', stderr: '' }
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { code: 0, stdout: `${repo}\n`, stderr: '' }
+      return { code: 1, stdout: '', stderr: 'not a repository' }
+    }
+    const listing = expectListing(await createFileExplorerHandler({ runGit })(
+      'list',
+      { path: repo, root, git: true },
+      new AbortController().signal,
+    ))
+    // `holder` only contains an untracked NESTED repo (a directory entry):
+    // its own changes belong to itself — no aggregate badge.
+    expect(listing.entries.find(entry => entry.name === 'holder')?.git).toBeUndefined()
+    // A real file change inside `changed` still badges it.
+    expect(listing.entries.find(entry => entry.name === 'changed')?.git).toBe('M')
+  })
+
+  it('does not badge a folder whose only change is a tracked gitlink (nested repo)', async () => {
+    const repo = join(root, 'repo')
+    await mkdir(join(repo, 'holder', 'nested'), { recursive: true })
+    const runGit: RunGit = async (_dir, args) => {
+      if (args[0] === 'status') return { code: 0, stdout: ' M holder/nested\n', stderr: '' }
+      if (args[0] === 'ls-files') return { code: 0, stdout: '160000 0123456789abcdef0123456789abcdef01234567 0\tholder/nested\n', stderr: '' }
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { code: 0, stdout: `${repo}\n`, stderr: '' }
+      return { code: 1, stdout: '', stderr: 'not a repository' }
+    }
+    const listing = expectListing(await createFileExplorerHandler({ runGit })(
+      'list',
+      { path: repo, root, git: true },
+      new AbortController().signal,
+    ))
+    // The parent folder must not wear the nested repo's dirty state.
+    expect(listing.entries.find(entry => entry.name === 'holder')?.git).toBeUndefined()
   })
 
   it.skipIf(process.platform !== 'win32')('renders a Windows drive root crumb without the trailing slash', () => {
@@ -294,6 +378,9 @@ describe('git snapshot', () => {
           { hash: 'def5678', subject: 'Local commit', date: '2026-08-19' },
           { hash: 'abc1234', subject: 'Cloud commit', date: '2026-08-20' },
         ],
+        // The fake git answers the count call with the log format (NaN), so
+        // the total falls back to the page length.
+        total: 2,
       },
     })
     expect(calls).toEqual([
@@ -301,8 +388,32 @@ describe('git snapshot', () => {
       ['for-each-ref', '--format=%(refname:short)', 'refs/heads'],
       ['status', '-sb'],
       ['rev-parse', '--short', 'HEAD@{upstream}'],
-      ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', 'HEAD'],
+      ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', '--skip=0', 'HEAD'],
+      ['rev-list', '--count', 'HEAD'],
     ])
+  })
+
+  it('honors and clamps client-submitted skip and limit', async () => {
+    const calls: string[][] = []
+    const runGit: RunGit = async (_root, args) => {
+      calls.push([...args])
+      if (args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') return { code: 0, stdout: 'true\n', stderr: '' }
+      if (args[0] === 'for-each-ref') return { code: 0, stdout: 'main\n', stderr: '' }
+      if (args[0] === 'status') return { code: 0, stdout: '## main\n', stderr: '' }
+      if (args[0] === 'rev-parse' && args[1] === '--short') return { code: 1, stdout: '', stderr: '' }
+      if (args[0] === 'log') return { code: 0, stdout: 'aaa1111\u001fpage row\u001f2026-08-20\u001f\u001e', stderr: '' }
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    const handler = createFileExplorerHandler({ runGit })
+    await handler('git', { root, skip: 40, limit: 5 }, new AbortController().signal)
+    const logCall = calls.find(args => args[0] === 'log')
+    expect(logCall).toEqual(['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '5', '--skip=40', 'HEAD'])
+    // Oversized limits are clamped to the host bound.
+    calls.length = 0
+    await handler('git', { root, limit: 10_000 }, new AbortController().signal)
+    const clamped = calls.find(args => args[0] === 'log')
+    const nIndex = clamped?.indexOf('-n') ?? -1
+    expect(nIndex >= 0 && clamped![nIndex + 1]).toBe('100')
   })
 
   it('views a requested branch tree and rejects unknown refs', async () => {
@@ -364,10 +475,14 @@ describe('git snapshot', () => {
           { hash: 'aaa1111', subject: 'added feature', date: '2026-08-20' },
           { hash: 'bbb2222', subject: 'initial file', date: '2026-08-19' },
         ],
+        // The fake git answers the count call with the log format (NaN), so
+        // the total falls back to the page length.
+        total: 2,
       },
     })
     // The path arrives as a root-relative forward-slash pathspec.
-    expect(calls.at(-1)).toEqual(['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', 'HEAD', '--', 'src/a.txt'])
+    expect(calls.at(-2)).toEqual(['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', '--skip=0', 'HEAD', '--', 'src/a.txt'])
+    expect(calls.at(-1)).toEqual(['rev-list', '--count', 'HEAD', '--', 'src/a.txt'])
   })
 
   it('rejects a file-history path outside the locked root', async () => {

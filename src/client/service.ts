@@ -16,8 +16,10 @@ import type {
 /** Callback face the view consumes; plain data and callbacks only. */
 export interface FileExplorerClient {
   list(root: string | undefined, path: string | undefined, signal: AbortSignal): Promise<RpcResult<FileExplorerListing>>
-  git(root: string, ref: string | null, signal: AbortSignal): Promise<RpcResult<GitSnapshot>>
-  fileHistory(root: string, path: string, signal: AbortSignal): Promise<RpcResult<FileHistorySnapshot>>
+  /** One commit page of the viewed ref's history (`skip` = rows already shown). */
+  git(root: string, ref: string | null, skip: number, limit: number, signal: AbortSignal): Promise<RpcResult<GitSnapshot>>
+  /** One commit page of the selected file's history (`skip` = rows already shown). */
+  fileHistory(root: string, path: string, skip: number, limit: number, signal: AbortSignal): Promise<RpcResult<FileHistorySnapshot>>
   /** Ask the host OS to reveal a path (the official host.openPath privilege). */
   openInSystem(path: string, signal: AbortSignal): Promise<RpcResult<FileExplorerOpenResult>>
 }
@@ -41,16 +43,23 @@ export function createFileExplorerClient(ctx: Context): FileExplorerClient {
       const result = await connection.rpc.call('/fileexplorer', 'list', payload, signal)
       return result as RpcResult<FileExplorerListing>
     },
-    git: async (root, ref, signal) => {
+    git: async (root, ref, skip, limit, signal) => {
       const payload: FileExplorerGitRequest = {
         root,
         ...(ref === null ? {} : { ref }),
+        ...(skip > 0 ? { skip } : {}),
+        limit,
       }
       const result = await connection.rpc.call('/fileexplorer', 'git', payload, signal)
       return result as RpcResult<GitSnapshot>
     },
-    fileHistory: async (root, path, signal) => {
-      const payload: FileExplorerHistoryRequest = { root, path }
+    fileHistory: async (root, path, skip, limit, signal) => {
+      const payload: FileExplorerHistoryRequest = {
+        root,
+        path,
+        ...(skip > 0 ? { skip } : {}),
+        limit,
+      }
       const result = await connection.rpc.call('/fileexplorer', 'file-history', payload, signal)
       return result as RpcResult<FileHistorySnapshot>
     },

@@ -61,6 +61,10 @@ export interface FileExplorerGitRequest {
   root: string
   /** Branch whose commit tree to view; absent means the working branch (HEAD). */
   ref?: string
+  /** First row to return (page offset for infinite scroll). */
+  skip?: number
+  /** Row count to return (page size); the host clamps it to a sane bound. */
+  limit?: number
 }
 
 /** file-history request payload: the file whose commit history to list. */
@@ -69,6 +73,10 @@ export interface FileExplorerHistoryRequest {
   root: string
   /** Absolute path of the selected file. */
   path: string
+  /** First row to return (page offset for infinite scroll). */
+  skip?: number
+  /** Row count to return (page size); the host clamps it to a sane bound. */
+  limit?: number
 }
 
 /**
@@ -81,8 +89,10 @@ export interface FileHistorySnapshot {
   reason?: 'no-git' | 'not-repo'
   /** Failure detail (git stderr or spawn message) when ok is false. */
   message?: string
-  /** Newest-first commits touching the file (capped). */
+  /** Newest-first commits touching the file (one page; the client appends pages). */
   commits: GitCommitRow[]
+  /** Total commits touching the file (drives the "load more" affordance). */
+  total: number
 }
 
 /** open request payload: the directory to reveal in the system file manager. */
@@ -135,6 +145,8 @@ export interface GitSnapshot {
   headHash: string | null
   /** Short hash of the viewed branch's upstream commit (the cloud position); null when untracked. */
   remoteHead: string | null
-  /** Newest-first commit rows (capped). */
+  /** Newest-first commit rows (one page; the client appends pages). */
   commits: GitCommitRow[]
+  /** Total commits reachable from the viewed ref (drives "load more"). */
+  total: number
 }

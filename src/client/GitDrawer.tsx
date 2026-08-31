@@ -17,16 +17,18 @@ import {
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { NS } from './locales.ts'
-import type { GitSnapshot } from '../contract.ts'
+import type { GitCommitRow, GitSnapshot } from '../contract.ts'
 import css from './GitDrawer.module.css'
 
 export interface GitDrawerInjected {
-  git(root: string, ref: string | null, signal: AbortSignal): Promise<RpcResult<GitSnapshot>>
+  git(root: string, ref: string | null, skip: number, limit: number, signal: AbortSignal): Promise<RpcResult<GitSnapshot>>
 }
 
 const POLL_MS = 2_000
 /** How long an external-change notice stays visible. */
 const NOTICE_MS = 3_000
+/** Rows fetched per page (submitted to the host; the host clamps it). */
+const PAGE_SIZE = 20
 
 function snapshotFingerprint(snapshot: GitSnapshot | undefined): string {
   if (snapshot === undefined) return ''
@@ -42,7 +44,13 @@ export function GitDrawer(props: {
 }): React.JSX.Element {
   const { root, expanded, git, t } = props
   const [snapshot, setSnapshot] = useState<GitSnapshot | undefined>(undefined)
+  // Accumulated commit rows across "load more" pages; the poll resets them
+  // whenever the base snapshot changes (branch switch / new commits).
+  const [commits, setCommits] = useState<GitCommitRow[]>([])
+  const [loadingMore, setLoadingMore] = useState(false)
   const [viewRef, setViewRef] = useState<string | null>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   // Commit whose message body is expanded under its row; null = none.
@@ -66,13 +74,16 @@ export function GitDrawer(props: {
     let timer: number | undefined
     const refresh = async (): Promise<void> => {
       try {
-        const result = await git(root, viewRef, new AbortController().signal)
+        const result = await git(root, viewRef, 0, PAGE_SIZE, new AbortController().signal)
         if (cancelled) return
         if (result.ok) {
           const next = snapshotFingerprint(result.value)
           if (next !== fingerprintRef.current) {
             fingerprintRef.current = next
             setSnapshot(result.value)
+            // A fresh page replaces the accumulated list: a base change
+            // (branch switch, new commits) makes the old pages stale.
+            setCommits(result.value.commits)
             const previous = previousState.current
             previousState.current = { branch: result.value.branch, headHash: result.value.headHash }
             if (previous !== null
@@ -112,6 +123,38 @@ export function GitDrawer(props: {
   const ahead = snapshot?.ok === true ? snapshot.ahead : 0
   const behind = snapshot?.ok === true ? snapshot.behind : 0
   const activeRef = viewRef ?? branch ?? null
+
+  // Fetch the next commit page and append it (hash-deduped: a commit may
+  // have landed between pages).
+  const loadMore = (): void => {
+    if (root === undefined || loadingMore) return
+    setLoadingMore(true)
+    void git(root, viewRef, commits.length, PAGE_SIZE, new AbortController().signal).then((result) => {
+      setLoadingMore(false)
+      if (!result.ok || result.value.commits.length === 0) return
+      setCommits(prev => {
+        const known = new Set(prev.map(commit => commit.hash))
+        return [...prev, ...result.value.commits.filter(commit => !known.has(commit.hash))]
+      })
+    })
+  }
+  const hasMore = snapshot?.ok === true && commits.length < snapshot.total
+
+  // Infinite scroll: when the list-bottom sentinel enters the body's
+  // viewport, fetch the next page — no manual button, and each page stays
+  // small (no one-shot full-history payload). The observer is re-created on
+  // every state change that affects whether/where a page is needed.
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    const body = bodyRef.current
+    if (!hasMore || sentinel === null || body === null || loadingMore) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(entry => entry.isIntersecting)) loadMore()
+    }, { root: body, rootMargin: '40px' })
+    observer.observe(sentinel)
+    return () => { observer.disconnect() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadMore reads the live refs.
+  }, [hasMore, loadingMore, root, viewRef, commits.length])
 
   return (
     <div className={css.drawer}>
@@ -160,7 +203,7 @@ export function GitDrawer(props: {
           ))}
         </div>
       )}
-      <div className={css.body}>
+      <div ref={bodyRef} className={css.body}>
         {notice !== null && <div className={css.notice}>{notice}</div>}
         {root === undefined ? (
           <div className={css.message}>{t('git.empty.workspace')}</div>
@@ -178,7 +221,7 @@ export function GitDrawer(props: {
               <div className={css.noUpstream}>{t('git.no-upstream')}</div>
             )}
             <ul className={css.list}>
-              {snapshot.commits.map(commit => {
+              {commits.map(commit => {
                 const isHead = snapshot.headHash !== null && commit.hash === snapshot.headHash
                 const isRemote = snapshot.remoteHead !== null && commit.hash === snapshot.remoteHead
                 const expanded = expandedHash === commit.hash
@@ -216,6 +259,14 @@ export function GitDrawer(props: {
                 )
               })}
             </ul>
+            {/* Infinite-scroll sentinel: entering the body's viewport fetches
+                the next page (nothing to observe once the history is fully
+                loaded, so it renders only while hasMore). */}
+            {hasMore && (
+              <div ref={sentinelRef} className={css.sentinel}>
+                {loadingMore && <span className={css.sentinelText}>{t('git.more.loading')}</span>}
+              </div>
+            )}
           </>
         )}
       </div>
