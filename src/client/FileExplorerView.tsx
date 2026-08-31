@@ -61,6 +61,31 @@ const MAX_AUX_RATIO = 0.6
 const MAX_AUX_TOTAL = 0.8
 /** CSS variable driving the official UI push; also read by the stylesheet. */
 const WIDTH_VAR = '--dsh-fileexplorer-width'
+
+/**
+ * Seamless title-bar toggle: the whole title row collapses/expands on click,
+ * but a press that was really a text-selection drag (pointer moved beyond the
+ * click threshold) or a click with a live selection does nothing — copying a
+ * path out of the title must never collapse the panel. Inside controls stop
+ * propagation, so the collapse button keeps its own behavior.
+ */
+function useTitleClick(toggle: () => void): {
+  onPointerDown: (event: React.PointerEvent) => void
+  onClick: (event: React.MouseEvent) => void
+} {
+  const downRef = useRef<{ x: number; y: number } | null>(null)
+  return {
+    onPointerDown: (event) => { downRef.current = { x: event.clientX, y: event.clientY } },
+    onClick: (event) => {
+      const selection = window.getSelection()
+      if (selection !== null && selection.toString() !== '') return
+      const start = downRef.current
+      downRef.current = null
+      if (start !== null && Math.abs(event.clientX - start.x) + Math.abs(event.clientY - start.y) > 4) return
+      toggle()
+    },
+  }
+}
 /** Root-level push stylesheet: official UI yields to the dock. */
 const PUSH_CSS = [
   `:root { ${WIDTH_VAR}: ${RAIL_WIDTH}px; }`,
@@ -127,7 +152,9 @@ export function FileExplorerDock(
   // auxiliary and collapse individually.
   const [expanded, setExpanded] = useState(true)
   const [gitExpanded, setGitExpanded] = useState(true)
-  const [historyExpanded, setHistoryExpanded] = useState(true)
+  // The history drawer defaults collapsed: the file region and the git view
+  // are the everyday surfaces; history opens on demand.
+  const [historyExpanded, setHistoryExpanded] = useState(false)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [gitRatio, setGitRatio] = useState(DEFAULT_GIT_RATIO)
   const [historyRatio, setHistoryRatio] = useState(DEFAULT_HISTORY_RATIO)
@@ -135,6 +162,10 @@ export function FileExplorerDock(
   const dragWidth = useRef<{ startX: number; startWidth: number; lastWidth: number } | null>(null)
   const dragGit = useRef<{ startY: number; startRatio: number; lastRatio: number } | null>(null)
   const dragHistory = useRef<{ startY: number; startRatio: number; lastRatio: number } | null>(null)
+  // Whole-title-row collapse/expand toggles (selection/drag safe).
+  const dockTitleClick = useTitleClick(() => setExpanded(false))
+  const gitTitleClick = useTitleClick(() => setGitExpanded(current => !current))
+  const historyTitleClick = useTitleClick(() => setHistoryExpanded(current => !current))
   const panelRef = useRef<HTMLDivElement>(null)
   const gitRef = useRef<HTMLDivElement>(null)
   const historyRef = useRef<HTMLDivElement>(null)
@@ -385,7 +416,7 @@ export function FileExplorerDock(
               title-bar control collapses the whole dock. It absorbs the
               space the git panel does not claim. */}
           <div className={css.drawer} style={{ flexGrow: 1, flexShrink: 1, flexBasis: '0%', minHeight: 0 }}>
-            <div className={css.titleRow}>
+            <div className={css.titleRow} {...dockTitleClick}>
               <div className={css.title}>{t('view.files')}</div>
               <button
                 type="button"
@@ -393,7 +424,7 @@ export function FileExplorerDock(
                 aria-expanded={expanded}
                 aria-label={t('collapse.label')}
                 title={t('collapse.label')}
-                onClick={() => { setExpanded(false) }}
+                onClick={(event) => { event.stopPropagation(); setExpanded(false) }}
               >
                 <IconChevronRightOutline14 size={14} />
               </button>
@@ -474,7 +505,7 @@ export function FileExplorerDock(
           {/* Git drawer: independent layer with its own title bar, collapse
               control, and height share. */}
           <div ref={gitRef} className={css.drawer} style={drawerStyle(gitExpanded, gitRatio)}>
-            <div className={css.titleRow}>
+            <div className={css.titleRow} {...gitTitleClick}>
               <div className={css.title}>{t('git.title')}</div>
               <button
                 type="button"
@@ -482,7 +513,7 @@ export function FileExplorerDock(
                 aria-expanded={gitExpanded}
                 aria-label={gitExpanded ? t('git.collapse') : t('git.expand')}
                 title={gitExpanded ? t('git.collapse') : t('git.expand')}
-                onClick={() => { setGitExpanded(current => !current) }}
+                onClick={(event) => { event.stopPropagation(); setGitExpanded(current => !current) }}
               >
                 {gitExpanded ? <IconChevronRightOutline14 size={14} /> : <IconChevronLeftOutline14 size={14} />}
               </button>
@@ -512,7 +543,7 @@ export function FileExplorerDock(
           {/* History drawer: independent layer with its own title bar,
               collapse control, and height share. */}
           <div ref={historyRef} className={css.drawer} style={drawerStyle(historyExpanded, historyRatio)}>
-            <div className={css.titleRow}>
+            <div className={css.titleRow} {...historyTitleClick}>
               <div className={css.title}>{t('history.title')}</div>
               <button
                 type="button"
@@ -520,7 +551,7 @@ export function FileExplorerDock(
                 aria-expanded={historyExpanded}
                 aria-label={historyExpanded ? t('history.collapse') : t('history.expand')}
                 title={historyExpanded ? t('history.collapse') : t('history.expand')}
-                onClick={() => { setHistoryExpanded(current => !current) }}
+                onClick={(event) => { event.stopPropagation(); setHistoryExpanded(current => !current) }}
               >
                 {historyExpanded ? <IconChevronRightOutline14 size={14} /> : <IconChevronLeftOutline14 size={14} />}
               </button>

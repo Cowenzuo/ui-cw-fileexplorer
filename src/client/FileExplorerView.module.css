@@ -114,7 +114,8 @@
   overflow: hidden;
 }
 
-/* Title bar: compact caption row with the collapse control at the right. */
+/* Title bar: compact caption row with the collapse control at the right.
+   The whole row toggles the drawer (selection/drag-safe click handling). */
 .titleRow {
   flex: none;
   display: flex;
@@ -124,6 +125,7 @@
   padding: 0 6px 0 10px;
   box-sizing: border-box;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
+  cursor: pointer;
 }
 
 .title {
