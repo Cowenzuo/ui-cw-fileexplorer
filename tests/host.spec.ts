@@ -328,6 +328,16 @@ describe('git snapshot', () => {
     ])
   })
 
+  it('strips the newline git appends after every log record', () => {
+    // Real git log output: every record is terminated by \x1e AND a newline,
+    // so records after the first carry a leading \n.
+    const output = 'abc1234\u001fFix\u001f2026-08-20\u001f\u001e\ndef5678\u001fAdd\u001f2026-08-19\u001f\u001e\n'
+    expect(parseGitLog(output)).toEqual([
+      { hash: 'abc1234', subject: 'Fix', date: '2026-08-20' },
+      { hash: 'def5678', subject: 'Add', date: '2026-08-19' },
+    ])
+  })
+
   it('parses multi-line commit bodies and trims their edges', () => {
     const output = 'abc1234\u001fFix thing\u001f2026-08-20\u001f1. first line\n2. second line\n\u001e'
     expect(parseGitLog(output)).toEqual([
@@ -347,6 +357,9 @@ describe('git snapshot', () => {
     })
     expect(parseGitStatus('## master...origin/master\n')).toEqual({
       branch: 'master', upstream: 'origin/master', ahead: 0, behind: 0,
+    })
+    expect(parseGitStatus('## master...origin/master [behind 2]\n')).toEqual({
+      branch: 'master', upstream: 'origin/master', ahead: 0, behind: 2,
     })
     expect(parseGitStatus('## master\n')).toEqual({ branch: 'master', upstream: null, ahead: 0, behind: 0 })
     expect(parseGitStatus('## HEAD (no branch)\n')).toEqual({ branch: null, upstream: null, ahead: 0, behind: 0 })
@@ -391,6 +404,31 @@ describe('git snapshot', () => {
       ['log', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', '-n', '20', '--skip=0', 'HEAD'],
       ['rev-list', '--count', 'HEAD'],
     ])
+  })
+
+  it('exposes the upstream tip when the cloud is ahead', async () => {
+    const runGit: RunGit = async (_root, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') return { code: 0, stdout: 'true\n', stderr: '' }
+      if (args[0] === 'for-each-ref') return { code: 0, stdout: 'main\n', stderr: '' }
+      if (args[0] === 'status') return { code: 0, stdout: '## main...origin/main [behind 2]\n', stderr: '' }
+      if (args[0] === 'rev-parse' && args[1] === '--short') return { code: 0, stdout: 'cloudtip\n', stderr: '' }
+      if (args[0] === 'rev-list') return { code: 0, stdout: '1\n', stderr: '' }
+      if (args[0] === 'log' && args[1] === '-1') {
+        return { code: 0, stdout: 'cloudtip\u001fCloud tip subject\u001f2026-08-20\u001f\u001e', stderr: '' }
+      }
+      if (args[0] === 'log') return { code: 0, stdout: 'local123\u001fLocal commit\u001f2026-08-19\u001f\u001e', stderr: '' }
+      return { code: 1, stdout: '', stderr: '' }
+    }
+    const result = await createFileExplorerHandler({ runGit })('git', { root }, new AbortController().signal)
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        behind: 2,
+        remoteHead: 'cloudtip',
+        remoteTip: { hash: 'cloudtip', subject: 'Cloud tip subject', date: '2026-08-20' },
+        commits: [{ hash: 'local123', subject: 'Local commit', date: '2026-08-19' }],
+      },
+    })
   })
 
   it('honors and clamps client-submitted skip and limit', async () => {

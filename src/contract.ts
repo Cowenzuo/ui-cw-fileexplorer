@@ -145,6 +145,12 @@ export interface GitSnapshot {
   headHash: string | null
   /** Short hash of the viewed branch's upstream commit (the cloud position); null when untracked. */
   remoteHead: string | null
+  /**
+   * The upstream tip commit when it is NOT part of the local history (the
+   * cloud is ahead): lets the view place the cloud marker on a row of its
+   * own. Absent when the upstream is behind/even (its tip is already listed).
+   */
+  remoteTip?: GitCommitRow
   /** Newest-first commit rows (one page; the client appends pages). */
   commits: GitCommitRow[]
   /** Total commits reachable from the viewed ref (drives "load more"). */

@@ -119,6 +119,15 @@
   font-weight: 600;
 }
 
+/* Divider label above the dedicated cloud-tip row (upstream is ahead). */
+.upstreamGap {
+  flex: none;
+  padding: 6px 6px 2px;
+  font-size: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  letter-spacing: 0.06em;
+}
+
 .body {
   flex: 1;
   min-height: 0;

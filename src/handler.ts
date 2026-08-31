@@ -247,14 +247,17 @@ export function runOpenCommand(path: string, signal: AbortSignal): Promise<{ cod
 /**
  * Parse `git log --pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e` output into
  * commit rows. Unit separators keep hash/subject/date/body fields apart (the
- * body may span lines); the record separator closes one commit. A record
+ * body may span lines); the record separator closes one commit, and git
+ * appends a newline after EVERY record — so every record after the first
+ * carries a leading `\n` that must be stripped (it would otherwise corrupt
+ * the hash and break hash-keyed comparisons like the cloud marker). A record
  * without the hash/subject pair is skipped defensively.
  */
 export function parseGitLog(output: string): GitCommitRow[] {
   const rows: GitCommitRow[] = []
   for (const record of output.split('\x1e')) {
     if (record === '') continue
-    const [hash, subject, date, ...bodyParts] = record.split('\x1f')
+    const [hash, subject, date, ...bodyParts] = record.replace(/^\r?\n/, '').split('\x1f')
     if (hash === undefined || subject === undefined) continue
     const body = bodyParts.length > 0 ? bodyParts.join('\x1f').trim() : undefined
     rows.push({
@@ -283,8 +286,9 @@ export interface GitBranchStatus {
 export function parseGitStatus(output: string): GitBranchStatus {
   const firstLine = output.split('\n')[0] ?? ''
   // Branch names cannot contain spaces, so `## HEAD (no branch)` yields the
-  // literal HEAD token and reads as detached.
-  const match = /^## ([^\s(]+?)(?:\.\.\.([^\s]+?))?(?: \[ahead (\d+)(?:, behind (\d+))?\])?$/.exec(firstLine)
+  // literal HEAD token and reads as detached. The bracket may carry ahead
+  // only, behind only, or both.
+  const match = /^## ([^\s(]+?)(?:\.\.\.([^\s]+?))?(?: \[(?:ahead (\d+)(?:, behind (\d+))?|behind (\d+))\])?$/.exec(firstLine)
   if (match === null || match[1] === undefined || match[1] === 'HEAD') {
     return { branch: null, upstream: null, ahead: 0, behind: 0 }
   }
@@ -292,7 +296,7 @@ export function parseGitStatus(output: string): GitBranchStatus {
     branch: match[1],
     upstream: match[2] ?? null,
     ahead: match[3] === undefined ? 0 : Number(match[3]),
-    behind: match[4] === undefined ? 0 : Number(match[4]),
+    behind: match[4] === undefined ? (match[5] === undefined ? 0 : Number(match[5])) : Number(match[4]),
   }
 }
 
@@ -344,6 +348,18 @@ export async function readGitSnapshot(
     const parsed = Number(countOut.stdout.trim())
     if (Number.isFinite(parsed) && parsed >= 0) total = parsed
   }
+  // When the cloud is AHEAD (behind > 0), its tip is not part of the local
+  // history, so no commit row can carry the cloud marker — fetch the tip
+  // itself for a dedicated row. Best-effort: a failure just hides it.
+  let remoteTip: GitCommitRow | undefined
+  if (status.behind > 0 && remoteHead !== null) {
+    const tipOut = await run(
+      root,
+      ['log', '-1', '--pretty=format:%h%x1f%s%x1f%ad%x1f%b%x1e', '--date=short', `${target}@{upstream}`],
+      signal,
+    )
+    remoteTip = tipOut.code === 0 ? parseGitLog(tipOut.stdout)[0] : undefined
+  }
   return {
     ok: true,
     branch: status.branch,
@@ -353,6 +369,7 @@ export async function readGitSnapshot(
     branches,
     headHash,
     remoteHead,
+    ...(remoteTip === undefined ? {} : { remoteTip }),
     commits,
     total,
   }

@@ -220,6 +220,30 @@ export function GitDrawer(props: {
             {snapshot.upstream === null && (
               <div className={css.noUpstream}>{t('git.no-upstream')}</div>
             )}
+            {/* The cloud is ahead: its tip is not part of the local history,
+                so it gets a dedicated marker row at the top of the list. */}
+            {snapshot.remoteTip !== undefined && !commits.some(c => c.hash === snapshot.remoteTip!.hash) && (
+              <>
+                <div className={css.upstreamGap}>
+                  {t('git.upstream-ahead', { count: String(snapshot.behind) })}
+                </div>
+                <ul className={css.list}>
+                  <li
+                    className={css.row}
+                    title={snapshot.remoteTip.subject}
+                  >
+                    <div className={css.rowLine}>
+                      <span className={clsx(css.tag, css.tagRemote)} title={snapshot.upstream ?? t('git.tag.remote')}>
+                        <IconGlobeOutline14 size={11} />
+                      </span>
+                      <span className={css.hash}>{snapshot.remoteTip.hash}</span>
+                      <span className={css.subject}>{snapshot.remoteTip.subject}</span>
+                      {snapshot.remoteTip.date !== undefined && <span className={css.date}>{snapshot.remoteTip.date}</span>}
+                    </div>
+                  </li>
+                </ul>
+              </>
+            )}
             <ul className={css.list}>
               {commits.map(commit => {
                 const isHead = snapshot.headHash !== null && commit.hash === snapshot.headHash
