@@ -14,10 +14,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the 'shell.overlay' SlotMap row (declared by ui-layout) and the
 // ctx.locale / ctx.slots Context merges must be in the program for the
-// register calls to type; LocaleDict/LocaleId are used below, which also
-// forces the locale package's declaration file (and its ctx.locale merge) to
-// load.
+// register calls to type; the ui-renderer package now owns the `ctx.slots`
+// Context merge. LocaleDict/LocaleId are used below, which also forces the
+// locale package's declaration file (and its ctx.locale merge) to load.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer'
+// The ui-session package declares the useSessions standard-prop merge.
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { LocaleDict, LocaleId } from '@deepseek-ai/dsh-client-locale/client'
 import { createFileExplorerClient } from './service.ts'
 import { FileExplorerDock, type FileExplorerInjected } from './FileExplorerView.tsx'

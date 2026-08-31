@@ -22,6 +22,5 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.connection.rpc.handle(
     '/fileexplorer',
     createFileExplorerHandler(),
-    { authority: 'trusted-host' },
   ), 'ui-cw-fileexplorer: /fileexplorer channel')
 }
