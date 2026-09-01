@@ -38,6 +38,11 @@ export interface FileExplorerInjected extends GitDrawerInjected, FileHistoryInje
   list(root: string | undefined, path: string | undefined, signal: AbortSignal): Promise<RpcResult<FileExplorerListing>>
   /** Reveal a path in the host OS (host.openPath). */
   openInSystem(path: string, signal: AbortSignal): Promise<RpcResult<unknown>>
+  /**
+   * Broadcast a clicked file to consumers (ui-cw-textviewer) through the
+   * cordis event bus (`ui-cw/fileexplorer/file-open`, payload below).
+   */
+  notifyFileOpen(file: { name: string; path: string; root: string }): void
 }
 
 /** Default expanded width in px. */
@@ -94,7 +99,7 @@ const PUSH_CSS = [
 export function FileExplorerDock(
   props: PropsRuntime<'shell.overlay'> & InjectFace<FileExplorerInjected> & PropsLocale<typeof NS>,
 ): React.JSX.Element {
-  const { useSessions, list, git, fileHistory, openInSystem, t } = props
+  const { useSessions, list, git, fileHistory, openInSystem, notifyFileOpen, t } = props
   const sessionId = useSessions(state => state.current)
   // The session workspace is the explorer's locked root (VS Code style): the
   // view may only descend inside it, never escape upward.
@@ -380,7 +385,12 @@ export function FileExplorerDock(
                     list={list}
                     t={t}
                     selectedPath={selectedFile?.path ?? null}
-                    onSelectFile={setSelectedFile}
+                    onSelectFile={(file) => {
+                      setSelectedFile(file)
+                      // Broadcast to consumers (the text viewer): clicking a
+                      // file opens it in the viewer; dirs never emit.
+                      if (file !== null) notifyFileOpen({ name: file.name, path: file.path, root })
+                    }}
                   />
                 </>
               )}

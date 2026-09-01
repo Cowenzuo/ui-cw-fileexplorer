@@ -30,6 +30,22 @@ import { en, NS, zh } from './locales.ts'
 export const inject = ['slots', 'locale', 'connection']
 
 /**
+ * Cross-plugin open-file protocol: broadcast on the plugin's own scope when
+ * a file row is clicked; consumers (ui-cw-textviewer) subscribe on the ROOT
+ * context, because cordis context filtering only matches listeners whose
+ * context is an ancestor of the emitter — sibling plugin scopes would never
+ * receive a plain `ctx.on`.
+ */
+export const FILE_OPEN_EVENT = 'ui-cw/fileexplorer/file-open'
+
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    /** A file row was clicked: base name, absolute path, locked workspace root. */
+    [FILE_OPEN_EVENT]: (file: { name: string; path: string; root: string }) => void
+  }
+}
+
+/**
  * Browser plugin body: register the file explorer dock into the overlay
  * layer. The registration rides the slot service's effect wrapper, so plugin
  * unload removes the dock.
@@ -49,6 +65,7 @@ export function apply(ctx: Context): void {
       git: client.git,
       fileHistory: client.fileHistory,
       openInSystem: client.openInSystem,
+      notifyFileOpen: (file) => { ctx.emit(FILE_OPEN_EVENT, file) },
     }),
   }, FileExplorerDock))
 }
