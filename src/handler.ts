@@ -694,15 +694,17 @@ export function createFileExplorerHandler(options: FileExplorerHandlerOptions = 
         const top = topOut.code === 0 && topOut.stdout.trim() !== '' ? normalize(topOut.stdout.trim()) : ''
         gitRepoRoot = top !== '' && isWithin(top, root) ? top : null
         if (gitRepoRoot !== null) {
-          const rel = relative(gitRepoRoot, root).split('\\').join('/')
-          const scope = rel === '' ? [] : ['--', rel]
-          const statusOut = await runGit(root, ['status', '--porcelain', ...scope], signal)
+          // Pathscope with '.' (relative to the cwd = the level): the diff is
+          // limited to the level's subtree (deep browsing stays cheap). git
+          // reports porcelain paths REPO-ROOT-relative regardless of cwd;
+          // ls-files needs --full-name to match that convention.
+          const statusOut = await runGit(root, ['status', '--porcelain', '--', '.'], signal)
           if (statusOut.code === 0) gitStatuses = parsePorcelainStatus(statusOut.stdout)
           // Gitlink paths (nested repos recorded in the index): their dirty
           // state belongs to themselves, never to a parent folder's badge.
           // Only needed when the status actually has rows.
           if (gitStatuses.size > 0) {
-            const lsOut = await runGit(root, ['ls-files', '-s', ...scope], signal)
+            const lsOut = await runGit(root, ['ls-files', '-s', '--full-name', '--', '.'], signal)
             if (lsOut.code === 0) gitlinks = parseGitlinks(lsOut.stdout)
           }
         }

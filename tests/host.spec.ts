@@ -551,6 +551,26 @@ describe('git snapshot', () => {
     expect(value.commits.map(commit => commit.subject)).toEqual(['second version', 'first version'])
   })
 
+  it.skipIf(!hasGit)('shows per-file states inside a subdirectory with real git', async () => {
+    const repo = join(root, 'real-repo')
+    await mkdir(join(repo, 'folder', 'deep'), { recursive: true })
+    expect(spawnSync('git', ['init', '-q', '-b', 'main', repo]).status).toBe(0)
+    await writeFile(join(repo, 'folder', 'a.txt'), 'a')
+    await writeFile(join(repo, 'folder', 'deep', 'b.txt'), 'b')
+    expect(spawnSync('git', ['add', '.'], { cwd: repo }).status).toBe(0)
+    expect(spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo }).status).toBe(0)
+    await writeFile(join(repo, 'folder', 'a.txt'), 'changed')
+    const handler = createFileExplorerHandler()
+    // The folder row at the repo root carries the aggregate badge…
+    const rootListing = expectListing(await handler('list', { path: repo, root, git: true }, new AbortController().signal))
+    expect(rootListing.entries.find(entry => entry.name === 'folder')?.git).toBe('M')
+    // …and entering it shows the exact file state (pathscope regression).
+    const folderListing = expectListing(await handler('list', { path: join(repo, 'folder'), root, git: true }, new AbortController().signal))
+    expect(folderListing.entries.find(entry => entry.name === 'a.txt')?.git).toBe('M')
+    // deep/ holds only a clean file in this test — no aggregate badge.
+    expect(folderListing.entries.find(entry => entry.name === 'deep')?.git).toBeUndefined()
+  })
+
   it('serves an open request through the open endpoint', async () => {
     const calls: string[] = []
     const runOpen = async (path: string): Promise<{ code: number | null; stderr: string }> => {
