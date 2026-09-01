@@ -1,9 +1,9 @@
 /**
  * File explorer dock: a right-side panel rendered into the official
- * `shell.overlay` slot. Three layers: the file region (main panel: breadcrumb
- * + listing with git working-tree states), the Git branch view drawer, and
- * the selected-file history drawer — each auxiliary drawer collapses
- * independently and has its own height divider.
+ * `shell.overlay` slot. Three layers: the file region (one lazy TREE of the
+ * workspace with git working-tree states per row), the Git branch view
+ * drawer, and the selected-file history drawer — each auxiliary drawer
+ * collapses independently and has its own height divider.
  *
  * Geometry is fully owned by this component — no official source changes:
  * a `#root { margin-right: var(--dsh-fileexplorer-width) }` stylesheet pushes
@@ -15,34 +15,31 @@
  * arrives through props; the poll effects are pure behavioral hooks.
  */
 import { useEffect, useRef, useState } from 'react'
-import clsx from 'clsx'
 import {
   IconChevronLeftOutline14,
   IconChevronRightOutline14,
-  IconFolderClose16,
   IconFolderOpen16,
-  Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { NS } from './locales.ts'
-import type { FileExplorerEntry, FileExplorerListing, GitSnapshot } from '../contract.ts'
+import type { FileExplorerListing } from '../contract.ts'
 import { GitDrawer, type GitDrawerInjected } from './GitDrawer.tsx'
 import { FileHistoryView, type FileHistoryInjected } from './FileHistoryView.tsx'
+import { FileTree, type FileTreeInjected } from './FileTree.tsx'
 import css from './FileExplorerView.module.css'
 
 /** Business callbacks injected by the register site (apply world). */
-export interface FileExplorerInjected extends GitDrawerInjected, FileHistoryInjected {
+export interface FileExplorerInjected extends GitDrawerInjected, FileHistoryInjected, FileTreeInjected {
   /**
    * List one level. `root` is the locked workspace the explorer may not
-   * escape; `path` (inside root) is the listed directory.
+   * escape; `path` (inside root) is the listed directory (a tree node).
    */
   list(root: string | undefined, path: string | undefined, signal: AbortSignal): Promise<RpcResult<FileExplorerListing>>
   /** Reveal a path in the host OS (host.openPath). */
   openInSystem(path: string, signal: AbortSignal): Promise<RpcResult<unknown>>
 }
 
-const POLL_MS = 2_000
 /** Default expanded width in px. */
 const DEFAULT_WIDTH = 320
 /** Expanded width drag bounds. */
@@ -94,39 +91,6 @@ const PUSH_CSS = [
 ].join('\n')
 
 /** Inline document glyph (the primitives library ships no file icon). */
-function FileGlyph(): React.JSX.Element {
-  return (
-    <svg width="12" height="14" viewBox="0 0 12 14" fill="none" aria-hidden="true">
-      <path
-        d="M1 1.5h6.5L11 5v7.5a1 1 0 0 1-1 1H1a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1Z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-      <path d="M7 1.5V5h4" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
-/** Stable fingerprint: skip a re-render when nothing user-visible changed. */
-function fingerprint(listing: FileExplorerListing | undefined): string {
-  if (listing === undefined) return ''
-  return JSON.stringify(listing.entries.map(entry => [entry.name, entry.kind, entry.size, entry.mtimeMs]))
-}
-
-function formatSize(bytes: number | undefined): string {
-  if (bytes === undefined) return ''
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['KB', 'MB', 'GB']
-  let value = bytes / 1024
-  let unit = units[0]!
-  for (const next of units.slice(1)) {
-    if (value < 1024) break
-    value /= 1024
-    unit = next
-  }
-  return `${value.toFixed(1)} ${unit}`
-}
-
 export function FileExplorerDock(
   props: PropsRuntime<'shell.overlay'> & InjectFace<FileExplorerInjected> & PropsLocale<typeof NS>,
 ): React.JSX.Element {
@@ -135,13 +99,9 @@ export function FileExplorerDock(
   // The session workspace is the explorer's locked root (VS Code style): the
   // view may only descend inside it, never escape upward.
   const cwd = useSessions(state => (sessionId === undefined ? undefined : state.byId[sessionId]?.cwd))
-  const [path, setPath] = useState<string | undefined>(undefined)
-  const [listing, setListing] = useState<FileExplorerListing | undefined>(undefined)
-  const [error, setError] = useState<string | undefined>(undefined)
   const [selectedFile, setSelectedFile] = useState<{ name: string; path: string } | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   const openErrorTimer = useRef<number | undefined>(undefined)
-  const fingerprintRef = useRef<string>('')
   const previousRoot = useRef(cwd)
   const root = cwd
 
@@ -282,11 +242,11 @@ export function FileExplorerDock(
     if (current !== null) setHistoryRatio(current.lastRatio)
   }
 
-  /** Reveal the navigated folder; a refusal surfaces as a transient error. */
+  /** Reveal the workspace root in the host OS; a refusal surfaces transiently. */
   const handleOpenInSystem = async (): Promise<void> => {
-    if (listing === undefined) return
+    if (root === undefined) return
     try {
-      const result = await openInSystem(listing.path, new AbortController().signal)
+      const result = await openInSystem(root, new AbortController().signal)
       if (result.ok) return
       setOpenError(result.error.message)
       window.clearTimeout(openErrorTimer.current)
@@ -300,57 +260,13 @@ export function FileExplorerDock(
     }
   }
 
-  // Re-root only when the WORKSPACE changes (a different session in the same
-  // workspace keeps the browsed position); clicking into another workspace
-  // resets to its root and clears the selected file.
+  // A different workspace resets the selection (the tree re-roots itself).
   useEffect(() => {
     if (previousRoot.current !== cwd) {
       previousRoot.current = cwd
-      setPath(undefined)
       setSelectedFile(null)
-      fingerprintRef.current = ''
     }
   }, [cwd])
-
-  // File loading and polling run only while the dock is expanded AND a
-  // workspace root exists; collapsing tears the timer down with the effect.
-  useEffect(() => {
-    if (!expanded || root === undefined) {
-      fingerprintRef.current = ''
-      setListing(undefined)
-      setError(undefined)
-      return
-    }
-    let cancelled = false
-    let timer: number | undefined
-    const refresh = async (): Promise<void> => {
-      try {
-        const result = await list(root, path, new AbortController().signal)
-        if (cancelled) return
-        if (result.ok) {
-          const next = fingerprint(result.value)
-          if (next !== fingerprintRef.current) {
-            fingerprintRef.current = next
-            setListing(result.value)
-          }
-          setError(undefined)
-        } else {
-          setError(result.error.message)
-        }
-      } catch {
-        if (!cancelled) setError('load failed')
-      }
-    }
-    void refresh()
-    timer = window.setInterval(() => { void refresh() }, POLL_MS)
-    const onVisible = (): void => { if (document.visibilityState === 'visible') void refresh() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      cancelled = true
-      if (timer !== undefined) window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
-  }, [expanded, root, path, list])
 
   /** One auxiliary drawer: its own basis share when open, title bar when not. */
   const drawerStyle = (open: boolean, ratio: number): React.CSSProperties => ({
@@ -434,57 +350,38 @@ export function FileExplorerDock(
                 <div className={css.message}>{t('empty.no-workspace')}</div>
               ) : (
                 <>
-                  {listing !== undefined && (
-                    <div className={css.navRow}>
-                      <Breadcrumbs
-                        crumbs={listing.crumbs}
-                        onNavigate={setPath}
-                      />
-                      {/* Reveal the navigated folder in the host OS
-                          (Explorer / Finder). Purely navigation-bound: it
-                          opens the breadcrumb's current directory, never
-                          the selected file. */}
-                      <button
-                        type="button"
-                        className={css.openButton}
-                        aria-label={t('open.folder')}
-                        title={`${t('open.folder')}：${listing.path}`}
-                        onClick={(event) => {
-                          // Drop focus immediately: the Explorer window takes
-                          // the foreground, and the browser restores focus to
-                          // this button in keyboard mode when the window is
-                          // re-activated — leaving a stuck focus ring. A
-                          // blurred button cannot keep one.
-                          event.currentTarget.blur()
-                          void handleOpenInSystem()
-                        }}
-                      >
-                        <IconFolderOpen16 size={14} />
-                      </button>
-                    </div>
-                  )}
+                  {/* Root header: the workspace path + the reveal-in-OS
+                      action. The tree below is the whole file surface. */}
+                  <div className={css.navRow}>
+                    <span className={css.rootLabel} title={root}>{root}</span>
+                    <button
+                      type="button"
+                      className={css.openButton}
+                      aria-label={t('open.folder')}
+                      title={`${t('open.folder')}：${root}`}
+                      onClick={(event) => {
+                        // Drop focus immediately: the Explorer window takes
+                        // the foreground, and the browser restores focus to
+                        // this button in keyboard mode when the window is
+                        // re-activated — leaving a stuck focus ring. A
+                        // blurred button cannot keep one.
+                        event.currentTarget.blur()
+                        void handleOpenInSystem()
+                      }}
+                    >
+                      <IconFolderOpen16 size={14} />
+                    </button>
+                  </div>
                   {openError !== null && (
                     <div className={css.message}>{t('error.load')}：{openError}</div>
                   )}
-                  {error !== undefined && (
-                    <div className={css.message}>{t('error.load')}：{error}</div>
-                  )}
-                  {listing !== undefined && (
-                    <ul className={css.list}>
-                      {listing.entries
-                        .filter(entry => !entry.hidden) // hidden entries stay off the surface (v1)
-                        .map(entry => (
-                          <FileRow
-                            key={entry.path}
-                            entry={entry}
-                            onOpen={entry.kind === 'dir' ? () => { setPath(entry.path) } : undefined}
-                            selected={selectedFile?.path === entry.path}
-                            onSelect={() => { setSelectedFile({ name: entry.name, path: entry.path }) }}
-                          />
-                        ))}
-                      {listing.truncated && <li className={css.message}>…</li>}
-                    </ul>
-                  )}
+                  <FileTree
+                    root={root}
+                    list={list}
+                    t={t}
+                    selectedPath={selectedFile?.path ?? null}
+                    onSelectFile={setSelectedFile}
+                  />
                 </>
               )}
             </div>
@@ -572,105 +469,3 @@ export function FileExplorerDock(
   )
 }
 
-/**
- * Breadcrumb navigation over one listing's crumb chain. The separator follows
- * the path style — backslash on Windows so the chain reads "D:\folder\sub"
- * rather than "D:\/sub". The chain never wraps: long chains collapse the
- * interior into an ellipsis and each crumb truncates its own label.
- */
-function Breadcrumbs(props: {
-  crumbs: readonly { name: string; path: string }[]
-  onNavigate: (path: string) => void
-}): React.JSX.Element {
-  const { crumbs, onNavigate } = props
-  const separator = crumbs.some(crumb => crumb.path.includes('\\')) ? '\\' : '/'
-  // Interior collapse: keep the root and the last two crumbs, drop the rest.
-  const visible = crumbs.length <= 3 ? crumbs : [crumbs[0]!, crumbs[crumbs.length - 2]!, crumbs[crumbs.length - 1]!]
-  const collapsed = crumbs.length > 3
-  return (
-    <div className={css.crumbs} role="navigation" aria-label="breadcrumb">
-      {visible.map((crumb, index) => {
-        const last = index === visible.length - 1
-        return (
-          <span key={crumb.path} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, minWidth: 0 }}>
-            {index > 0 && (
-              <>
-                {index === 1 && collapsed && (
-                  <span className={css.crumbSeparator} aria-hidden="true">…</span>
-                )}
-                <span className={css.crumbSeparator}>{separator}</span>
-              </>
-            )}
-            {/* Every crumb — the current one included, so the initial
-                workspace-root state still answers hover — reveals its full
-                path. The dock sits at the right edge, so the bubble drops
-                below the crumb. */}
-            <Tooltip label={crumb.path} side="bottom" delayMs={500}>
-              {last ? (
-                <span className={clsx(css.crumb, css.crumbActive)}>{crumb.name}</span>
-              ) : (
-                <button
-                  type="button"
-                  className={css.crumb}
-                  onClick={() => { onNavigate(crumb.path) }}
-                >
-                  {crumb.name}
-                </button>
-              )}
-            </Tooltip>
-          </span>
-        )
-      })}
-    </div>
-  )
-}
-
-function FileRow(props: {
-  entry: FileExplorerEntry
-  onOpen?: () => void
-  selected: boolean
-  onSelect: () => void
-}): React.JSX.Element {
-  const { entry, onOpen, selected, onSelect } = props
-  const [hovered, setHovered] = useState(false)
-  const clickable = onOpen !== undefined || entry.kind === 'file'
-  const git = entry.git
-  return (
-    <li>
-      <div
-        role={clickable ? 'button' : undefined}
-        tabIndex={clickable ? 0 : undefined}
-        className={clsx(css.row, onOpen !== undefined && css.rowDir, selected && css.rowSelected)}
-        onClick={onOpen ?? onSelect}
-        onKeyDown={clickable ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); (onOpen ?? onSelect)() } } : undefined}
-        onMouseEnter={() => { setHovered(true) }}
-        onMouseLeave={() => { setHovered(false) }}
-      >
-        <span className={css.rowIcon} aria-hidden="true">
-          {entry.kind === 'dir'
-            ? (hovered ? <IconFolderOpen16 size={16} /> : <IconFolderClose16 size={16} />)
-            : <FileGlyph />}
-        </span>
-        {git !== undefined && (
-          <span
-            className={clsx(css.gitBadge, git === 'M' && css.gitModified, git === 'D' && css.gitDeleted, git === 'A' && css.gitAdded)}
-            title={git === 'M' ? 'modified' : git === 'D' ? 'deleted' : 'added'}
-          >
-            {git}
-          </span>
-        )}
-        <span
-          className={clsx(
-            css.name,
-            git === 'M' && css.nameModified,
-            git === 'D' && css.nameDeleted,
-            git === 'A' && css.nameAdded,
-          )}
-        >
-          {entry.name}
-        </span>
-        <span className={css.meta}>{entry.kind === 'dir' ? '' : formatSize(entry.size)}</span>
-      </div>
-    </li>
-  )
-}

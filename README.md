@@ -9,10 +9,10 @@
 
 ### 功能总览
 
-1. **文件区（主面板）**：单级列表 + 面包屑导航；工作区锁定（VS Code 式，host 侧
-   强制校验）；Windows 真实隐藏属性过滤（`attrib`）；Git 工作区三态
-   （`M` 黄 / `D` 红删除线 / `A` 绿，删除条目由 git 回填）；导航行右侧本地打开按钮
-   （`host.openPath`）
+1. **文件区（主面板）**：单棵懒加载文件树（根层级自动加载，展开目录按需取层，
+   2s 轮询原地刷新且保留展开状态）；工作区锁定（VS Code 式，host 侧强制校验）；
+   Windows 真实隐藏属性过滤（`attrib`）；Git 工作区三态（`M` 黄 / `D` 红删除线 /
+   `A` 绿，删除条目由 git 回填）；顶部根路径 + 本地打开按钮（`host.openPath`）
 2. **Git 分支视图抽屉**：当前分支徽标 + ahead/behind 计数；下拉切换查看任意本地
    分支的提交树（只读）；提交行本地/云端位置标签（蓝 / 橙图标）；外部改动提示；
    点击提交行展开完整提交描述
@@ -53,7 +53,8 @@ src/
 └── client/           # 浏览器半
     ├── index.ts      # apply：slots.inject('shell.overlay') 注册
     ├── service.ts    # RPC 客户端封装（list/git/fileHistory/openInSystem）
-    ├── FileExplorerView.tsx   # dock 骨架 + 文件区（+ Breadcrumbs/FileRow）
+    ├── FileExplorerView.tsx   # dock 骨架 + 文件区
+    ├── FileTree.tsx           # 懒加载文件树（展开取层 / 轮询原地合并）
     ├── GitDrawer.tsx          # Git 分支视图抽屉
     ├── FileHistoryView.tsx    # 历史变更记录抽屉
     ├── locales.ts             # 文案（zh 默认 / en）
@@ -77,7 +78,7 @@ pnpm build     # 生成产物 lib/index.js + lib/client.js
 
 ```sh
 pnpm typecheck                    # tsc --noEmit
-pnpm test                         # vitest（33 个：解析/端点/真仓库集成）
+pnpm test                         # vitest（41 个：解析/端点/真仓库集成）
 pnpm build:watch                  # client 面 watch → HMR 热更
 .\publish.ps1                     # 一键发布：build+test → npm pack → 上架
                                   #   %USERPROFILE%\.dsh\profiles\web\vendor
@@ -185,8 +186,8 @@ fix: 收起态展开按钮垂直居中失效
 
 ### React 组件与样式
 
-- 组件与文件同名（PascalCase）；辅助纯组件同文件内定义（`Breadcrumbs`、
-  `FileRow`）
+- 组件与文件同名（PascalCase）；辅助纯函数同文件内定义（如 `formatSize`），
+  独立视图组件单独成文件（`FileTree.tsx`、`GitDrawer.tsx`）
 - 组件**不接触 ctx**：数据经四份 props（runtime / render-slots / store / inject）
   注入；apply 内回调经 `inject` 工厂传递
 - CSS Modules 类名：camelCase，语义化（`titleRow`、`branchBadge`、`railButton`、

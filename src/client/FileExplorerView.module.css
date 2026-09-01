@@ -172,13 +172,26 @@
   box-sizing: border-box;
 }
 
-/* Navigation row: breadcrumbs (flex) + the open-in-system button. */
+/* Navigation row: the workspace-root label (flex) + open-in-system button. */
 .navRow {
   flex: none;
   display: flex;
   align-items: center;
   gap: 2px;
   min-width: 0;
+}
+
+/* The root path label: one line, ellipsized, full path on hover. */
+.rootLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .openButton {
@@ -214,49 +227,6 @@
   outline-offset: 1px;
 }
 
-.crumbs {
-  /* Never shrinks: when the auxiliary panel squeezes the body, the
-     navigation keeps its single line and the list scrolls instead. */
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 4px;
-  /* One line only: long chains collapse interior crumbs instead of wrapping. */
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
-
-.crumb {
-  background: none;
-  border: none;
-  padding: 1px 4px;
-  border-radius: 4px;
-  cursor: pointer;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-  line-height: 18px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 160px;
-}
-
-.crumb:hover:not(.crumbActive) {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.crumbActive {
-  color: var(--dsw-alias-label-primary);
-  font-weight: 600;
-  cursor: default;
-}
-
-.crumbSeparator {
-  color: var(--dsw-alias-label-tertiary);
-}
-
 .list {
   /* Same non-shrink contract as .crumbs: content keeps its height and the
      body scrolls when space runs out. */
@@ -279,10 +249,6 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.rowDir {
-  cursor: pointer;
-}
-
 /* Selected file (the history view's target). */
 .rowSelected {
   background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
@@ -290,15 +256,6 @@
 
 .rowSelected:hover {
   background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
-}
-
-.rowIcon {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  color: var(--dsw-alias-label-secondary);
 }
 
 /* Git working-tree state badge (M modified / D deleted / A added). */
@@ -365,8 +322,50 @@
   line-height: 16px;
 }
 
-.hidden {
-  opacity: 0.45;
+/* Lazy tree surface: the file region's single tree (nested ul/li levels). */
+.treeList {
+  flex: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.treeRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  min-width: 0;
+  cursor: pointer;
+  outline: none;
+}
+
+.treeRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Keyboard focus only: a click must not leave a focus ring on rows. */
+.treeRow:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: -2px;
+}
+
+/* Twist/expand affordance column; file rows show a dot in its place. */
+.treeTwisty {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.treeDot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
 }
 
 .message {
