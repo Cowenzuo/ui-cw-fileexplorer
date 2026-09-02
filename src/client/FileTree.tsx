@@ -150,13 +150,62 @@ export function FileTree(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read the live ref.
   }, [root, list])
 
-  // Bring a selection into view (history/selection sync): the row may not
-  // be rendered yet (collapsed parents) — then this is a no-op; the next
-  // poll keeps the selection, and the sync re-fires on the next open.
+  /** Recursively locate a node by path in the loaded tree. */
+  const findNode = (list: FileTreeNode[], path: string): FileTreeNode | undefined => {
+    for (const node of list) {
+      if (node.path === path) return node
+      if (node.children !== null) {
+        const found = findNode(node.children, path)
+        if (found !== undefined) return found
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Reveal a file: expand every ancestor directory from the root down to
+   * the file's parent, LAZY-LOADING each level that has not been loaded
+   * yet, so the row actually exists in the DOM (selection sync from the
+   * viewer cannot highlight a row that was never rendered).
+   */
+  const revealPath = async (path: string): Promise<void> => {
+    const dirs: string[] = []
+    let current = path
+    for (;;) {
+      const parent = current.slice(0, Math.max(current.lastIndexOf('\\'), current.lastIndexOf('/')))
+      if (parent === '' || parent === current) break
+      dirs.unshift(parent)
+      current = parent
+    }
+    for (const dir of dirs) {
+      const node = findNode(nodesRef.current ?? [], dir)
+      if (node === undefined || node.kind !== 'dir') break
+      if (node.expanded && node.children !== null) continue
+      if (node.children === null) {
+        const result = await list(root, dir, new AbortController().signal)
+        if (!result.ok) return
+        updateNodes(prev => mapAt(prev, dir, n => ({
+          ...n,
+          children: mergeNodes(n.children, result.value.entries, result.value.truncated),
+        })))
+      }
+      updateNodes(prev => mapAt(prev, dir, n => ({ ...n, expanded: true })))
+    }
+  }
+
+  // Reveal a selection (history/selection sync): expand the ancestor chain
+  // first, then scroll the row into view. Without a rendered row the scroll
+  // is a no-op; a deleted file simply stops the walk.
   useEffect(() => {
     if (selectedPath === null) return
-    const row = document.querySelector(`[data-dsh-tree-row="${CSS.escape(selectedPath)}"]`)
-    row?.scrollIntoView({ block: 'nearest' })
+    let cancelled = false
+    void revealPath(selectedPath).then(() => {
+      if (cancelled) return
+      const row = document.querySelector(`[data-dsh-tree-row="${CSS.escape(selectedPath)}"]`)
+      row?.scrollIntoView({ block: 'nearest' })
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read the live ref.
   }, [selectedPath])
 
   /** Toggle a directory: lazy-load its level on first expand. */
