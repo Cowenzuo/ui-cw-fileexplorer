@@ -1,7 +1,7 @@
 {
     "name":  "@dsh-plugins/ui-cw-fileexplorer",
     "description":  "Read-only, real-time file explorer view for the dsh web conversation area",
-    "version":  "0.1.0-rc2",
+    "version":  "0.1.0-rc3",
     "type":  "module",
     "main":  "lib/index.js",
     "exports":  {
