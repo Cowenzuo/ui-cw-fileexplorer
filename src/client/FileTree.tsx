@@ -13,6 +13,7 @@ import { IconChevronDownOutline14, IconChevronRightOutline14 } from '@deepseek-a
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { NS } from './locales.ts'
+import { ancestorDirs, findNode } from './treeUtils.ts'
 import type { FileExplorerListing, FileExplorerEntry } from '../contract.ts'
 import css from './FileExplorerView.module.css'
 
@@ -88,6 +89,7 @@ function collectExpandedPaths(nodes: FileTreeNode[]): string[] {
   return out
 }
 
+/** Recursively locate a node by path in the loaded tree. */
 export function FileTree(props: {
   root: string
   list: FileTreeInjected['list']
@@ -150,18 +152,6 @@ export function FileTree(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read the live ref.
   }, [root, list])
 
-  /** Recursively locate a node by path in the loaded tree. */
-  const findNode = (list: FileTreeNode[], path: string): FileTreeNode | undefined => {
-    for (const node of list) {
-      if (node.path === path) return node
-      if (node.children !== null) {
-        const found = findNode(node.children, path)
-        if (found !== undefined) return found
-      }
-    }
-    return undefined
-  }
-
   /**
    * Reveal a file: expand every ancestor directory from the root down to
    * the file's parent, LAZY-LOADING each level that has not been loaded
@@ -169,15 +159,7 @@ export function FileTree(props: {
    * viewer cannot highlight a row that was never rendered).
    */
   const revealPath = async (path: string): Promise<void> => {
-    const dirs: string[] = []
-    let current = path
-    for (;;) {
-      const parent = current.slice(0, Math.max(current.lastIndexOf('\\'), current.lastIndexOf('/')))
-      if (parent === '' || parent === current) break
-      dirs.unshift(parent)
-      current = parent
-    }
-    for (const dir of dirs) {
+    for (const dir of ancestorDirs(path, root)) {
       const node = findNode(nodesRef.current ?? [], dir)
       if (node === undefined || node.kind !== 'dir') break
       if (node.expanded && node.children !== null) continue
