@@ -38,10 +38,20 @@ export const inject = ['slots', 'locale', 'connection']
  */
 export const FILE_OPEN_EVENT = 'ui-cw/fileexplorer/file-open'
 
+/**
+ * Reverse-direction selection sync: ui-cw-textviewer asks this dock to
+ * SELECT (highlight) a tree row when a history entry is opened. Honored
+ * only when the file lies inside THIS workspace (the viewer checks nothing
+ * — it just broadcasts; the dock filters).
+ */
+export const SELECT_FILE_EVENT = 'ui-cw/textviewer/select-file'
+
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /** A file row was clicked: base name, absolute path, locked workspace root. */
     [FILE_OPEN_EVENT]: (file: { name: string; path: string; root: string }) => void
+    /** The viewer asks for a selection sync (history opens). */
+    [SELECT_FILE_EVENT]: (file: { name: string; path: string }) => void
   }
 }
 
@@ -54,6 +64,12 @@ declare module '@deepseek-ai/cordis' {
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en } satisfies Record<LocaleId, LocaleDict>), 'fileexplorer: dictionaries')
   const client = createFileExplorerClient(ctx)
+  // Selection-sync listeners (the dock subscribes through the inject face —
+  // components never touch ctx).
+  const selectListeners = new Set<(file: { name: string; path: string }) => void>()
+  ctx.root.on(SELECT_FILE_EVENT, (file) => {
+    for (const listener of selectListeners) listener(file)
+  })
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
     id: 'fileexplorer',
@@ -66,6 +82,10 @@ export function apply(ctx: Context): void {
       fileHistory: client.fileHistory,
       openInSystem: client.openInSystem,
       notifyFileOpen: (file) => { ctx.emit(FILE_OPEN_EVENT, file) },
+      subscribeSelect: (listener) => {
+        selectListeners.add(listener)
+        return () => { selectListeners.delete(listener) }
+      },
     }),
   }, FileExplorerDock))
 }

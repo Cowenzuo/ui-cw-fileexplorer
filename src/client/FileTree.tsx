@@ -150,9 +150,17 @@ export function FileTree(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read the live ref.
   }, [root, list])
 
+  // Bring a selection into view (history/selection sync): the row may not
+  // be rendered yet (collapsed parents) — then this is a no-op; the next
+  // poll keeps the selection, and the sync re-fires on the next open.
+  useEffect(() => {
+    if (selectedPath === null) return
+    const row = document.querySelector(`[data-dsh-tree-row="${CSS.escape(selectedPath)}"]`)
+    row?.scrollIntoView({ block: 'nearest' })
+  }, [selectedPath])
+
   /** Toggle a directory: lazy-load its level on first expand. */
-  const toggle = (node: FileTreeNode): void => {
-    if (node.kind !== 'dir') return
+  const toggle = (node: FileTreeNode): void => {    if (node.kind !== 'dir') return
     if (node.children === null) {
       if (inFlight.current.has(node.path)) return
       inFlight.current.add(node.path)
@@ -178,6 +186,7 @@ export function FileTree(props: {
         <div
           role="button"
           tabIndex={0}
+          data-dsh-tree-row={node.path}
           className={clsx(css.treeRow, selected && css.rowSelected)}
           style={{ paddingLeft: 6 + depth * 14 }}
           onClick={() => { node.kind === 'dir' ? toggle(node) : onSelectFile({ name: node.name, path: node.path }) }}

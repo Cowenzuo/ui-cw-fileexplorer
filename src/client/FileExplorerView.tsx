@@ -43,6 +43,15 @@ export interface FileExplorerInjected extends GitDrawerInjected, FileHistoryInje
    * cordis event bus (`ui-cw/fileexplorer/file-open`, payload below).
    */
   notifyFileOpen(file: { name: string; path: string; root: string }): void
+  /** Subscribe to the viewer's selection-sync requests; returns an unsubscribe. */
+  subscribeSelect(listener: (file: { name: string; path: string }) => void): () => void
+}
+
+/** Client-side workspace containment (the server enforces it for reads). */
+function isWithinRoot(root: string, path: string): boolean {
+  const a = root.toLowerCase().replace(/[\\/]+$/, '')
+  const b = path.toLowerCase()
+  return b === a || b.startsWith(`${a}\\`)
 }
 
 /** Default expanded width in px. */
@@ -99,7 +108,7 @@ const PUSH_CSS = [
 export function FileExplorerDock(
   props: PropsRuntime<'shell.overlay'> & InjectFace<FileExplorerInjected> & PropsLocale<typeof NS>,
 ): React.JSX.Element {
-  const { useSessions, list, git, fileHistory, openInSystem, notifyFileOpen, t } = props
+  const { useSessions, list, git, fileHistory, openInSystem, notifyFileOpen, subscribeSelect, t } = props
   const sessionId = useSessions(state => state.current)
   // The session workspace is the explorer's locked root (VS Code style): the
   // view may only descend inside it, never escape upward.
@@ -272,6 +281,15 @@ export function FileExplorerDock(
       setSelectedFile(null)
     }
   }, [cwd])
+
+  // Selection sync from the text viewer (history opens): highlight the row
+  // ONLY when the file lies inside THIS workspace — an out-of-workspace
+  // history entry must not touch the tree. The row scrolls into view via the
+  // tree's selectedPath effect (a no-op when the row is not rendered).
+  useEffect(() => subscribeSelect((file) => {
+    if (root === undefined || !isWithinRoot(root, file.path)) return
+    setSelectedFile({ name: file.name, path: file.path })
+  }), [subscribeSelect, root])
 
   /** One auxiliary drawer: its own basis share when open, title bar when not. */
   const drawerStyle = (open: boolean, ratio: number): React.CSSProperties => ({
